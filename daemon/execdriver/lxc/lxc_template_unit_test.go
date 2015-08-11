@@ -15,7 +15,7 @@ import (
 
 	"github.com/docker/docker/daemon/execdriver"
 	nativeTemplate "github.com/docker/docker/daemon/execdriver/native/template"
-	"github.com/docker/libcontainer/configs"
+	"github.com/opencontainers/runc/libcontainer/configs"
 	"github.com/syndtr/gocapability/capability"
 )
 
@@ -47,7 +47,7 @@ func TestLXCConfig(t *testing.T) {
 		ID: "1",
 		Resources: &execdriver.Resources{
 			Memory:    int64(mem),
-			CpuShares: int64(cpu),
+			CPUShares: int64(cpu),
 		},
 		Network: &execdriver.Network{
 			Mtu:       1500,

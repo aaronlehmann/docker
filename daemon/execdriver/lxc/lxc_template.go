@@ -12,9 +12,11 @@ import (
 	"github.com/docker/docker/daemon/execdriver"
 	nativeTemplate "github.com/docker/docker/daemon/execdriver/native/template"
 	"github.com/docker/docker/pkg/stringutils"
-	"github.com/docker/libcontainer/label"
+	"github.com/opencontainers/runc/libcontainer/label"
 )
 
+// LxcTemplate is the template for lxc driver, it's used
+// to configure LXC.
 const LxcTemplate = `
 lxc.network.type = none
 # root filesystem
@@ -46,6 +48,9 @@ lxc.cgroup.devices.allow = {{$allowedDevice.CgroupString}}
 # Use mnt.putold as per https://bugs.launchpad.net/ubuntu/+source/lxc/+bug/986385
 lxc.pivotdir = lxc_putold
 
+# lxc.autodev is not compatible with lxc --device switch
+lxc.autodev = 0
+
 # NOTICE: These mounts must be applied within the namespace
 {{if .ProcessConfig.Privileged}}
 # WARNING: mounting procfs and/or sysfs read-write is a known attack vector.
@@ -67,11 +72,11 @@ lxc.aa_profile = {{.AppArmorProfile}}
 {{end}}
 
 {{if .ProcessConfig.Tty}}
-lxc.mount.entry = {{.ProcessConfig.Console}} {{escapeFstabSpaces $ROOTFS}}/dev/console none bind,rw 0 0
+lxc.mount.entry = {{.ProcessConfig.Console}} {{escapeFstabSpaces $ROOTFS}}/dev/console none bind,rw,create=file 0 0
 {{end}}
 
-lxc.mount.entry = devpts {{escapeFstabSpaces $ROOTFS}}/dev/pts devpts {{formatMountLabel "newinstance,ptmxmode=0666,nosuid,noexec" ""}} 0 0
-lxc.mount.entry = shm {{escapeFstabSpaces $ROOTFS}}/dev/shm tmpfs {{formatMountLabel "size=65536k,nosuid,nodev,noexec" ""}} 0 0
+lxc.mount.entry = devpts {{escapeFstabSpaces $ROOTFS}}/dev/pts devpts {{formatMountLabel "newinstance,ptmxmode=0666,nosuid,noexec,create=dir" ""}} 0 0
+lxc.mount.entry = shm {{escapeFstabSpaces $ROOTFS}}/dev/shm tmpfs {{formatMountLabel "size=65536k,nosuid,nodev,noexec,create=dir" ""}} 0 0
 
 {{range $value := .Mounts}}
 {{$createVal := isDirectory $value.Source}}
@@ -91,11 +96,11 @@ lxc.cgroup.memory.soft_limit_in_bytes = {{.Resources.Memory}}
 lxc.cgroup.memory.memsw.limit_in_bytes = {{$memSwap}}
 {{end}}
 {{end}}
-{{if .Resources.CpuShares}}
-lxc.cgroup.cpu.shares = {{.Resources.CpuShares}}
+{{if .Resources.CPUShares}}
+lxc.cgroup.cpu.shares = {{.Resources.CPUShares}}
 {{end}}
-{{if .Resources.CpuPeriod}}
-lxc.cgroup.cpu.cfs_period_us = {{.Resources.CpuPeriod}}
+{{if .Resources.CPUPeriod}}
+lxc.cgroup.cpu.cfs_period_us = {{.Resources.CPUPeriod}}
 {{end}}
 {{if .Resources.CpusetCpus}}
 lxc.cgroup.cpuset.cpus = {{.Resources.CpusetCpus}}
@@ -103,14 +108,17 @@ lxc.cgroup.cpuset.cpus = {{.Resources.CpusetCpus}}
 {{if .Resources.CpusetMems}}
 lxc.cgroup.cpuset.mems = {{.Resources.CpusetMems}}
 {{end}}
-{{if .Resources.CpuQuota}}
-lxc.cgroup.cpu.cfs_quota_us = {{.Resources.CpuQuota}}
+{{if .Resources.CPUQuota}}
+lxc.cgroup.cpu.cfs_quota_us = {{.Resources.CPUQuota}}
 {{end}}
 {{if .Resources.BlkioWeight}}
 lxc.cgroup.blkio.weight = {{.Resources.BlkioWeight}}
 {{end}}
 {{if .Resources.OomKillDisable}}
 lxc.cgroup.memory.oom_control = {{.Resources.OomKillDisable}}
+{{end}}
+{{if gt .Resources.MemorySwappiness 0}}
+lxc.cgroup.memory.swappiness = {{.Resources.MemorySwappiness}}
 {{end}}
 {{end}}
 
@@ -152,7 +160,7 @@ lxc.cap.drop = {{.}}
 {{end}}
 `
 
-var LxcTemplateCompiled *template.Template
+var lxcTemplateCompiled *template.Template
 
 // Escape spaces in strings according to the fstab documentation, which is the
 // format for "lxc.mount.entry" lines in lxc.conf. See also "man 5 fstab".
@@ -248,7 +256,7 @@ func init() {
 		"dropList":          dropList,
 		"getHostname":       getHostname,
 	}
-	LxcTemplateCompiled, err = template.New("lxc").Funcs(funcMap).Parse(LxcTemplate)
+	lxcTemplateCompiled, err = template.New("lxc").Funcs(funcMap).Parse(LxcTemplate)
 	if err != nil {
 		panic(err)
 	}

@@ -17,28 +17,53 @@ import (
 
 // Options represents the information needed to create client and server TLS configurations.
 type Options struct {
+	CAFile string
+
+	// If either CertFile or KeyFile is empty, Client() will not load them
+	// preventing the client from authenticating to the server.
+	// However, Server() requires them and will error out if they are empty.
+	CertFile string
+	KeyFile  string
+
+	// client-only option
 	InsecureSkipVerify bool
-	ClientAuth         tls.ClientAuthType
-	CAFile             string
-	CertFile           string
-	KeyFile            string
+	// server-only option
+	ClientAuth tls.ClientAuthType
 }
 
-// Default is a secure-enough TLS configuration.
-var Default = tls.Config{
+// Extra (server-side) accepted CBC cipher suites - will phase out in the future
+var acceptedCBCCiphers = []uint16{
+	tls.TLS_ECDHE_ECDSA_WITH_AES_256_CBC_SHA,
+	tls.TLS_ECDHE_ECDSA_WITH_AES_128_CBC_SHA,
+	tls.TLS_ECDHE_RSA_WITH_AES_256_CBC_SHA,
+	tls.TLS_ECDHE_RSA_WITH_AES_128_CBC_SHA,
+	tls.TLS_RSA_WITH_AES_256_CBC_SHA,
+	tls.TLS_RSA_WITH_AES_128_CBC_SHA,
+}
+
+// Client TLS cipher suites (dropping CBC ciphers for client preferred suite set)
+var clientCipherSuites = []uint16{
+	tls.TLS_ECDHE_ECDSA_WITH_AES_128_GCM_SHA256,
+	tls.TLS_ECDHE_RSA_WITH_AES_128_GCM_SHA256,
+}
+
+// For use by code which already has a crypto/tls options struct but wants to
+// use a commonly accepted set of TLS cipher suites, with known weak algorithms removed
+var DefaultServerAcceptedCiphers = append(clientCipherSuites, acceptedCBCCiphers...)
+
+// ServerDefault is a secure-enough TLS configuration for the server TLS configuration.
+var ServerDefault = tls.Config{
 	// Avoid fallback to SSL protocols < TLS1.0
 	MinVersion:               tls.VersionTLS10,
 	PreferServerCipherSuites: true,
-	CipherSuites: []uint16{
-		tls.TLS_ECDHE_RSA_WITH_AES_128_GCM_SHA256,
-		tls.TLS_ECDHE_ECDSA_WITH_AES_128_GCM_SHA256,
-		tls.TLS_ECDHE_RSA_WITH_AES_128_CBC_SHA,
-		tls.TLS_ECDHE_RSA_WITH_AES_256_CBC_SHA,
-		tls.TLS_ECDHE_ECDSA_WITH_AES_256_CBC_SHA,
-		tls.TLS_ECDHE_ECDSA_WITH_AES_128_CBC_SHA,
-		tls.TLS_RSA_WITH_AES_128_CBC_SHA,
-		tls.TLS_RSA_WITH_AES_256_CBC_SHA,
-	},
+	CipherSuites:             DefaultServerAcceptedCiphers,
+}
+
+// ClientDefault is a secure-enough TLS configuration for the client TLS configuration.
+var ClientDefault = tls.Config{
+	// Prefer TLS1.2 as the client minimum
+	MinVersion:   tls.VersionTLS12,
+	CipherSuites: clientCipherSuites,
 }
 
 // certPool returns an X.509 certificate pool from `caFile`, the certificate file.
@@ -47,10 +72,10 @@ func certPool(caFile string) (*x509.CertPool, error) {
 	certPool := x509.NewCertPool()
 	pem, err := ioutil.ReadFile(caFile)
 	if err != nil {
-		return nil, fmt.Errorf("Could not read CA certificate %s: %v", caFile, err)
+		return nil, fmt.Errorf("Could not read CA certificate %q: %v", caFile, err)
 	}
 	if !certPool.AppendCertsFromPEM(pem) {
-		return nil, fmt.Errorf("failed to append certificates from PEM file: %s", caFile)
+		return nil, fmt.Errorf("failed to append certificates from PEM file: %q", caFile)
 	}
 	s := certPool.Subjects()
 	subjects := make([]string, len(s))
@@ -63,7 +88,7 @@ func certPool(caFile string) (*x509.CertPool, error) {
 
 // Client returns a TLS configuration meant to be used by a client.
 func Client(options Options) (*tls.Config, error) {
-	tlsConfig := Default
+	tlsConfig := ClientDefault
 	tlsConfig.InsecureSkipVerify = options.InsecureSkipVerify
 	if !options.InsecureSkipVerify {
 		CAs, err := certPool(options.CAFile)
@@ -86,14 +111,14 @@ func Client(options Options) (*tls.Config, error) {
 
 // Server returns a TLS configuration meant to be used by a server.
 func Server(options Options) (*tls.Config, error) {
-	tlsConfig := Default
+	tlsConfig := ServerDefault
 	tlsConfig.ClientAuth = options.ClientAuth
 	tlsCert, err := tls.LoadX509KeyPair(options.CertFile, options.KeyFile)
 	if err != nil {
 		if os.IsNotExist(err) {
-			return nil, fmt.Errorf("Could not load X509 key pair (%s, %s): %v", options.CertFile, options.KeyFile, err)
+			return nil, fmt.Errorf("Could not load X509 key pair (cert: %q, key: %q): %v", options.CertFile, options.KeyFile, err)
 		}
-		return nil, fmt.Errorf("Error reading X509 key pair (%s, %s): %v. Make sure the key is not encrypted.", options.CertFile, options.KeyFile, err)
+		return nil, fmt.Errorf("Error reading X509 key pair (cert: %q, key: %q): %v. Make sure the key is not encrypted.", options.CertFile, options.KeyFile, err)
 	}
 	tlsConfig.Certificates = []tls.Certificate{tlsCert}
 	if options.ClientAuth >= tls.VerifyClientCertIfGiven {

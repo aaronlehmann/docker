@@ -11,13 +11,14 @@ import (
 	"github.com/docker/docker/pkg/fileutils"
 	"github.com/docker/docker/pkg/parsers/kernel"
 	"github.com/docker/docker/pkg/parsers/operatingsystem"
+	"github.com/docker/docker/pkg/sysinfo"
 	"github.com/docker/docker/pkg/system"
 	"github.com/docker/docker/registry"
 	"github.com/docker/docker/utils"
 )
 
 func (daemon *Daemon) SystemInfo() (*types.Info, error) {
-	images, _ := daemon.Graph().Map()
+	images := daemon.Graph().Map()
 	var imgcount int
 	if images == nil {
 		imgcount = 0
@@ -56,20 +57,19 @@ func (daemon *Daemon) SystemInfo() (*types.Info, error) {
 		initPath = daemon.SystemInitPath()
 	}
 
+	sysInfo := sysinfo.New(false)
+
 	v := &types.Info{
 		ID:                 daemon.ID,
 		Containers:         len(daemon.List()),
 		Images:             imgcount,
 		Driver:             daemon.GraphDriver().String(),
 		DriverStatus:       daemon.GraphDriver().Status(),
-		MemoryLimit:        daemon.SystemConfig().MemoryLimit,
-		SwapLimit:          daemon.SystemConfig().SwapLimit,
-		CpuCfsPeriod:       daemon.SystemConfig().CpuCfsPeriod,
-		CpuCfsQuota:        daemon.SystemConfig().CpuCfsQuota,
-		IPv4Forwarding:     !daemon.SystemConfig().IPv4ForwardingDisabled,
+		IPv4Forwarding:     !sysInfo.IPv4ForwardingDisabled,
+		BridgeNfIptables:   !sysInfo.BridgeNfCallIptablesDisabled,
+		BridgeNfIP6tables:  !sysInfo.BridgeNfCallIP6tablesDisabled,
 		Debug:              os.Getenv("DEBUG") != "",
 		NFd:                fileutils.GetTotalUsedFds(),
-		OomKillDisable:     daemon.SystemConfig().OomKillDisable,
 		NGoroutines:        runtime.NumGoroutine(),
 		SystemTime:         time.Now().Format(time.RFC3339Nano),
 		ExecutionDriver:    daemon.ExecutionDriver().Name(),
@@ -77,7 +77,7 @@ func (daemon *Daemon) SystemInfo() (*types.Info, error) {
 		NEventsListener:    daemon.EventsService.SubscribersCount(),
 		KernelVersion:      kernelVersion,
 		OperatingSystem:    operatingSystem,
-		IndexServerAddress: registry.IndexServerAddress(),
+		IndexServerAddress: registry.IndexServer,
 		RegistryConfig:     daemon.RegistryService.Config,
 		InitSha1:           dockerversion.INITSHA1,
 		InitPath:           initPath,
@@ -88,11 +88,23 @@ func (daemon *Daemon) SystemInfo() (*types.Info, error) {
 		ExperimentalBuild:  utils.ExperimentalBuild(),
 	}
 
+	// TODO Windows. Refactor this more once sysinfo is refactored into
+	// platform specific code. On Windows, sysinfo.cgroupMemInfo and
+	// sysinfo.cgroupCpuInfo will be nil otherwise and cause a SIGSEGV if
+	// an attempt is made to access through them.
+	if runtime.GOOS != "windows" {
+		v.MemoryLimit = sysInfo.MemoryLimit
+		v.SwapLimit = sysInfo.SwapLimit
+		v.OomKillDisable = sysInfo.OomKillDisable
+		v.CPUCfsPeriod = sysInfo.CPUCfsPeriod
+		v.CPUCfsQuota = sysInfo.CPUCfsQuota
+	}
+
 	if httpProxy := os.Getenv("http_proxy"); httpProxy != "" {
-		v.HttpProxy = httpProxy
+		v.HTTPProxy = httpProxy
 	}
 	if httpsProxy := os.Getenv("https_proxy"); httpsProxy != "" {
-		v.HttpsProxy = httpsProxy
+		v.HTTPSProxy = httpsProxy
 	}
 	if noProxy := os.Getenv("no_proxy"); noProxy != "" {
 		v.NoProxy = noProxy

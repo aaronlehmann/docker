@@ -3,7 +3,6 @@ package logger
 import (
 	"bytes"
 	"encoding/json"
-	"errors"
 	"io"
 	"testing"
 	"time"
@@ -19,10 +18,6 @@ func (l *TestLoggerJSON) Close() error { return nil }
 
 func (l *TestLoggerJSON) Name() string { return "json" }
 
-func (l *TestLoggerJSON) GetReader() (io.Reader, error) {
-	return nil, errors.New("not used in the test")
-}
-
 type TestLoggerText struct {
 	*bytes.Buffer
 }
@@ -35,10 +30,6 @@ func (l *TestLoggerText) Log(m *Message) error {
 func (l *TestLoggerText) Close() error { return nil }
 
 func (l *TestLoggerText) Name() string { return "text" }
-
-func (l *TestLoggerText) GetReader() (io.Reader, error) {
-	return nil, errors.New("not used in the test")
-}
 
 func TestCopier(t *testing.T) {
 	stdoutLine := "Line that thinks that it is log line from docker stdout"
@@ -59,15 +50,12 @@ func TestCopier(t *testing.T) {
 	jsonLog := &TestLoggerJSON{Encoder: json.NewEncoder(&jsonBuf)}
 
 	cid := "a7317399f3f857173c6179d44823594f8294678dea9999662e5c625b5a1c7657"
-	c, err := NewCopier(cid,
+	c := NewCopier(cid,
 		map[string]io.Reader{
 			"stdout": &stdout,
 			"stderr": &stderr,
 		},
 		jsonLog)
-	if err != nil {
-		t.Fatal(err)
-	}
 	c.Run()
 	wait := make(chan struct{})
 	go func() {

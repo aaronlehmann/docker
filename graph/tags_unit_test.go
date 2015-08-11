@@ -11,6 +11,7 @@ import (
 	"github.com/docker/docker/daemon/events"
 	"github.com/docker/docker/daemon/graphdriver"
 	_ "github.com/docker/docker/daemon/graphdriver/vfs" // import the vfs driver so it is used in the tests
+	"github.com/docker/docker/graph/tags"
 	"github.com/docker/docker/image"
 	"github.com/docker/docker/trust"
 	"github.com/docker/docker/utils"
@@ -119,17 +120,17 @@ func TestLookupImage(t *testing.T) {
 		testOfficialImageName + ":" + testOfficialImageID,
 		testOfficialImageName + ":" + testOfficialImageIDShort,
 		testOfficialImageName,
-		testOfficialImageName + ":" + DEFAULTTAG,
+		testOfficialImageName + ":" + tags.DefaultTag,
 		"docker.io/" + testOfficialImageName,
-		"docker.io/" + testOfficialImageName + ":" + DEFAULTTAG,
+		"docker.io/" + testOfficialImageName + ":" + tags.DefaultTag,
 		"index.docker.io/" + testOfficialImageName,
-		"index.docker.io/" + testOfficialImageName + ":" + DEFAULTTAG,
+		"index.docker.io/" + testOfficialImageName + ":" + tags.DefaultTag,
 		"library/" + testOfficialImageName,
-		"library/" + testOfficialImageName + ":" + DEFAULTTAG,
+		"library/" + testOfficialImageName + ":" + tags.DefaultTag,
 		"docker.io/library/" + testOfficialImageName,
-		"docker.io/library/" + testOfficialImageName + ":" + DEFAULTTAG,
+		"docker.io/library/" + testOfficialImageName + ":" + tags.DefaultTag,
 		"index.docker.io/library/" + testOfficialImageName,
-		"index.docker.io/library/" + testOfficialImageName + ":" + DEFAULTTAG,
+		"index.docker.io/library/" + testOfficialImageName + ":" + tags.DefaultTag,
 	}
 
 	privateLookups := []string{
@@ -138,7 +139,7 @@ func TestLookupImage(t *testing.T) {
 		testPrivateImageName + ":" + testPrivateImageID,
 		testPrivateImageName + ":" + testPrivateImageIDShort,
 		testPrivateImageName,
-		testPrivateImageName + ":" + DEFAULTTAG,
+		testPrivateImageName + ":" + tags.DefaultTag,
 	}
 
 	invalidLookups := []string{
@@ -196,8 +197,8 @@ func TestValidateDigest(t *testing.T) {
 	}{
 		{"", true},
 		{"latest", true},
-		{"a:b", false},
-		{"aZ0124-.+:bY852-_.+=", false},
+		{"sha256:b", false},
+		{"tarsum+v1+sha256:bY852-_.+=", false},
 		{"#$%#$^:$%^#$%", true},
 	}
 

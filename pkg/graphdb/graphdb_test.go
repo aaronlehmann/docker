@@ -121,7 +121,7 @@ func TestParents(t *testing.T) {
 		}
 
 		if len(parents) != 1 {
-			t.Fatalf("Expected 2 entries for %s got %d", key, len(parents))
+			t.Fatalf("Expected 1 entry for %s got %d", key, len(parents))
 		}
 
 		if parents[0] != p {
@@ -243,7 +243,7 @@ func TestAddSelfAsChild(t *testing.T) {
 	}
 }
 
-func TestAddChildToNonExistantRoot(t *testing.T) {
+func TestAddChildToNonExistentRoot(t *testing.T) {
 	db, dbpath := newTestDb(t)
 	defer destroyTestDb(dbpath)
 

@@ -10,15 +10,15 @@ import (
 	"syscall"
 
 	"github.com/docker/docker/daemon/execdriver"
-	"github.com/docker/libcontainer/apparmor"
-	"github.com/docker/libcontainer/configs"
-	"github.com/docker/libcontainer/devices"
-	"github.com/docker/libcontainer/utils"
+	"github.com/opencontainers/runc/libcontainer/apparmor"
+	"github.com/opencontainers/runc/libcontainer/configs"
+	"github.com/opencontainers/runc/libcontainer/devices"
+	"github.com/opencontainers/runc/libcontainer/utils"
 )
 
 // createContainer populates and configures the container type with the
 // data provided by the execdriver.Command
-func (d *driver) createContainer(c *execdriver.Command) (*configs.Config, error) {
+func (d *Driver) createContainer(c *execdriver.Command) (*configs.Config, error) {
 	container := execdriver.InitContainer(c)
 
 	if err := d.createIpc(container, c); err != nil {
@@ -38,13 +38,23 @@ func (d *driver) createContainer(c *execdriver.Command) (*configs.Config, error)
 	}
 
 	if c.ProcessConfig.Privileged {
-		// clear readonly for /sys
+		if !container.Readonlyfs {
+			// clear readonly for /sys
+			for i := range container.Mounts {
+				if container.Mounts[i].Destination == "/sys" {
+					container.Mounts[i].Flags &= ^syscall.MS_RDONLY
+				}
+			}
+			container.ReadonlyPaths = nil
+		}
+
+		// clear readonly for cgroup
 		for i := range container.Mounts {
-			if container.Mounts[i].Destination == "/sys" {
+			if container.Mounts[i].Device == "cgroup" {
 				container.Mounts[i].Flags &= ^syscall.MS_RDONLY
 			}
 		}
-		container.ReadonlyPaths = nil
+
 		container.MaskPaths = nil
 		if err := d.setPrivileged(container); err != nil {
 			return nil, err
@@ -55,12 +65,27 @@ func (d *driver) createContainer(c *execdriver.Command) (*configs.Config, error)
 		}
 	}
 
+	container.AdditionalGroups = c.GroupAdd
+
 	if c.AppArmorProfile != "" {
 		container.AppArmorProfile = c.AppArmorProfile
 	}
 
 	if err := execdriver.SetupCgroups(container, c); err != nil {
 		return nil, err
+	}
+
+	if container.Readonlyfs {
+		for i := range container.Mounts {
+			switch container.Mounts[i].Destination {
+			case "/proc", "/dev", "/dev/pts":
+				continue
+			}
+			container.Mounts[i].Flags |= syscall.MS_RDONLY
+		}
+
+		/* These paths must be remounted as r/o */
+		container.ReadonlyPaths = append(container.ReadonlyPaths, "/dev")
 	}
 
 	if err := d.setupMounts(container, c); err != nil {
@@ -88,7 +113,7 @@ func generateIfaceName() (string, error) {
 	return "", errors.New("Failed to find name for new interface")
 }
 
-func (d *driver) createNetwork(container *configs.Config, c *execdriver.Command) error {
+func (d *Driver) createNetwork(container *configs.Config, c *execdriver.Command) error {
 	if c.Network == nil {
 		return nil
 	}
@@ -118,7 +143,7 @@ func (d *driver) createNetwork(container *configs.Config, c *execdriver.Command)
 	return nil
 }
 
-func (d *driver) createIpc(container *configs.Config, c *execdriver.Command) error {
+func (d *Driver) createIpc(container *configs.Config, c *execdriver.Command) error {
 	if c.Ipc.HostIpc {
 		container.Namespaces.Remove(configs.NEWIPC)
 		return nil
@@ -143,7 +168,7 @@ func (d *driver) createIpc(container *configs.Config, c *execdriver.Command) err
 	return nil
 }
 
-func (d *driver) createPid(container *configs.Config, c *execdriver.Command) error {
+func (d *Driver) createPid(container *configs.Config, c *execdriver.Command) error {
 	if c.Pid.HostPid {
 		container.Namespaces.Remove(configs.NEWPID)
 		return nil
@@ -152,7 +177,7 @@ func (d *driver) createPid(container *configs.Config, c *execdriver.Command) err
 	return nil
 }
 
-func (d *driver) createUTS(container *configs.Config, c *execdriver.Command) error {
+func (d *Driver) createUTS(container *configs.Config, c *execdriver.Command) error {
 	if c.UTS.HostUTS {
 		container.Namespaces.Remove(configs.NEWUTS)
 		container.Hostname = ""
@@ -162,7 +187,7 @@ func (d *driver) createUTS(container *configs.Config, c *execdriver.Command) err
 	return nil
 }
 
-func (d *driver) setPrivileged(container *configs.Config) (err error) {
+func (d *Driver) setPrivileged(container *configs.Config) (err error) {
 	container.Capabilities = execdriver.GetAllCapabilities()
 	container.Cgroups.AllowAllDevices = true
 
@@ -175,16 +200,15 @@ func (d *driver) setPrivileged(container *configs.Config) (err error) {
 	if apparmor.IsEnabled() {
 		container.AppArmorProfile = "unconfined"
 	}
-
 	return nil
 }
 
-func (d *driver) setCapabilities(container *configs.Config, c *execdriver.Command) (err error) {
+func (d *Driver) setCapabilities(container *configs.Config, c *execdriver.Command) (err error) {
 	container.Capabilities, err = execdriver.TweakCapabilities(container.Capabilities, c.CapAdd, c.CapDrop)
 	return err
 }
 
-func (d *driver) setupRlimits(container *configs.Config, c *execdriver.Command) {
+func (d *Driver) setupRlimits(container *configs.Config, c *execdriver.Command) {
 	if c.Resources == nil {
 		return
 	}
@@ -198,7 +222,7 @@ func (d *driver) setupRlimits(container *configs.Config, c *execdriver.Command) 
 	}
 }
 
-func (d *driver) setupMounts(container *configs.Config, c *execdriver.Command) error {
+func (d *Driver) setupMounts(container *configs.Config, c *execdriver.Command) error {
 	userMounts := make(map[string]struct{})
 	for _, m := range c.Mounts {
 		userMounts[m.Destination] = struct{}{}
@@ -235,7 +259,7 @@ func (d *driver) setupMounts(container *configs.Config, c *execdriver.Command) e
 	return nil
 }
 
-func (d *driver) setupLabels(container *configs.Config, c *execdriver.Command) {
+func (d *Driver) setupLabels(container *configs.Config, c *execdriver.Command) {
 	container.ProcessLabel = c.ProcessLabel
 	container.MountLabel = c.MountLabel
 }

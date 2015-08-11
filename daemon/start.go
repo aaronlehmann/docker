@@ -2,6 +2,7 @@ package daemon
 
 import (
 	"fmt"
+	"runtime"
 
 	"github.com/docker/docker/runconfig"
 )
@@ -20,16 +21,25 @@ func (daemon *Daemon) ContainerStart(name string, hostConfig *runconfig.HostConf
 		return fmt.Errorf("Container already started")
 	}
 
-	if _, err = daemon.verifyContainerSettings(hostConfig); err != nil {
-		return err
+	// Windows does not have the backwards compatibility issue here.
+	if runtime.GOOS != "windows" {
+		// This is kept for backward compatibility - hostconfig should be passed when
+		// creating a container, not during start.
+		if hostConfig != nil {
+			if err := daemon.setHostConfig(container, hostConfig); err != nil {
+				return err
+			}
+		}
+	} else {
+		if hostConfig != nil {
+			return fmt.Errorf("Supplying a hostconfig on start is not supported. It should be supplied on create")
+		}
 	}
 
-	// This is kept for backward compatibility - hostconfig should be passed when
-	// creating a container, not during start.
-	if hostConfig != nil {
-		if err := daemon.setHostConfig(container, hostConfig); err != nil {
-			return err
-		}
+	// check if hostConfig is in line with the current system settings.
+	// It may happen cgroups are umounted or the like.
+	if _, err = daemon.verifyContainerSettings(container.hostConfig, nil); err != nil {
+		return err
 	}
 
 	if err := container.Start(); err != nil {

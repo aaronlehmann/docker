@@ -6,11 +6,13 @@ import (
 	"io/ioutil"
 	"strings"
 	"sync"
+	"time"
 
 	"github.com/Sirupsen/logrus"
 	"github.com/docker/docker/daemon/execdriver"
 	"github.com/docker/docker/pkg/broadcastwriter"
 	"github.com/docker/docker/pkg/ioutils"
+	"github.com/docker/docker/pkg/pools"
 	"github.com/docker/docker/pkg/stringid"
 	"github.com/docker/docker/runconfig"
 )
@@ -20,12 +22,16 @@ type execConfig struct {
 	ID            string
 	Running       bool
 	ExitCode      int
-	ProcessConfig execdriver.ProcessConfig
+	ProcessConfig *execdriver.ProcessConfig
 	StreamConfig
 	OpenStdin  bool
 	OpenStderr bool
 	OpenStdout bool
 	Container  *Container
+	canRemove  bool
+
+	// waitStart will be closed immediately after the exec is really started.
+	waitStart chan struct{}
 }
 
 type execStore struct {
@@ -67,6 +73,11 @@ func (e *execStore) List() []string {
 }
 
 func (execConfig *execConfig) Resize(h, w int) error {
+	select {
+	case <-execConfig.waitStart:
+	case <-time.After(time.Second):
+		return fmt.Errorf("Exec %s is not running, so it can not be resized.", execConfig.ID)
+	}
 	return execConfig.ProcessConfig.Terminal.Resize(h, w)
 }
 
@@ -78,7 +89,16 @@ func (d *Daemon) registerExecCommand(execConfig *execConfig) {
 }
 
 func (d *Daemon) getExecConfig(name string) (*execConfig, error) {
-	if execConfig := d.execCommands.Get(name); execConfig != nil {
+	execConfig := d.execCommands.Get(name)
+
+	// If the exec is found but its container is not in the daemon's list of
+	// containers then it must have been delete, in which case instead of
+	// saying the container isn't running, we should return a 404 so that
+	// the user sees the same error now that they will after the
+	// 5 minute clean-up loop is run which erases old/dead execs.
+
+	if execConfig != nil && d.containers.Get(execConfig.Container.ID) != nil {
+
 		if !execConfig.Container.IsRunning() {
 			return nil, fmt.Errorf("Container %s is not running", execConfig.Container.ID)
 		}
@@ -109,7 +129,6 @@ func (d *Daemon) getActiveContainer(name string) (*Container, error) {
 }
 
 func (d *Daemon) ContainerExecCreate(config *runconfig.ExecConfig) (string, error) {
-
 	// Not all drivers support Exec (LXC for example)
 	if err := checkExecSupport(d.execDriver.Name()); err != nil {
 		return "", err
@@ -123,15 +142,20 @@ func (d *Daemon) ContainerExecCreate(config *runconfig.ExecConfig) (string, erro
 	cmd := runconfig.NewCommand(config.Cmd...)
 	entrypoint, args := d.getEntrypointAndArgs(runconfig.NewEntrypoint(), cmd)
 
-	processConfig := execdriver.ProcessConfig{
+	user := config.User
+	if len(user) == 0 {
+		user = container.Config.User
+	}
+
+	processConfig := &execdriver.ProcessConfig{
 		Tty:        config.Tty,
 		Entrypoint: entrypoint,
 		Arguments:  args,
-		User:       config.User,
+		User:       user,
 	}
 
 	execConfig := &execConfig{
-		ID:            stringid.GenerateRandomID(),
+		ID:            stringid.GenerateNonCryptoID(),
 		OpenStdin:     config.AttachStdin,
 		OpenStdout:    config.AttachStdout,
 		OpenStderr:    config.AttachStderr,
@@ -139,6 +163,7 @@ func (d *Daemon) ContainerExecCreate(config *runconfig.ExecConfig) (string, erro
 		ProcessConfig: processConfig,
 		Container:     container,
 		Running:       false,
+		waitStart:     make(chan struct{}),
 	}
 
 	d.registerExecCommand(execConfig)
@@ -183,7 +208,7 @@ func (d *Daemon) ContainerExecStart(execName string, stdin io.ReadCloser, stdout
 		go func() {
 			defer w.Close()
 			defer logrus.Debugf("Closing buffered stdin pipe")
-			io.Copy(w, stdin)
+			pools.Copy(w, stdin)
 		}()
 		cStdin = r
 	}
@@ -216,7 +241,6 @@ func (d *Daemon) ContainerExecStart(execName string, stdin io.ReadCloser, stdout
 			execErr <- fmt.Errorf("Cannot run exec command %s in container %s: %s", execName, container.ID, err)
 		}
 	}()
-
 	select {
 	case err := <-attachErr:
 		if err != nil {
@@ -231,7 +255,7 @@ func (d *Daemon) ContainerExecStart(execName string, stdin io.ReadCloser, stdout
 }
 
 func (d *Daemon) Exec(c *Container, execConfig *execConfig, pipes *execdriver.Pipes, startCallback execdriver.StartCallback) (int, error) {
-	exitStatus, err := d.execDriver.Exec(c.command, &execConfig.ProcessConfig, pipes, startCallback)
+	exitStatus, err := d.execDriver.Exec(c.command, execConfig.ProcessConfig, pipes, startCallback)
 
 	// On err, make sure we don't leave ExitCode at zero
 	if err != nil && exitStatus == 0 {
@@ -242,4 +266,40 @@ func (d *Daemon) Exec(c *Container, execConfig *execConfig, pipes *execdriver.Pi
 	execConfig.Running = false
 
 	return exitStatus, err
+}
+
+// execCommandGC runs a ticker to clean up the daemon references
+// of exec configs that are no longer part of the container.
+func (d *Daemon) execCommandGC() {
+	for range time.Tick(5 * time.Minute) {
+		var (
+			cleaned          int
+			liveExecCommands = d.containerExecIds()
+		)
+		for id, config := range d.execCommands.s {
+			if config.canRemove {
+				cleaned++
+				d.execCommands.Delete(id)
+			} else {
+				if _, exists := liveExecCommands[id]; !exists {
+					config.canRemove = true
+				}
+			}
+		}
+		if cleaned > 0 {
+			logrus.Debugf("clean %d unused exec commands", cleaned)
+		}
+	}
+}
+
+// containerExecIds returns a list of all the current exec ids that are in use
+// and running inside a container.
+func (d *Daemon) containerExecIds() map[string]struct{} {
+	ids := map[string]struct{}{}
+	for _, c := range d.containers.List() {
+		for _, id := range c.execCommands.List() {
+			ids[id] = struct{}{}
+		}
+	}
+	return ids
 }

@@ -1,11 +1,12 @@
 // +build linux
 
+// Package gelf provides the log driver for forwarding server logs to
+// endpoints that support the Graylog Extended Log Format.
 package gelf
 
 import (
 	"bytes"
 	"fmt"
-	"io"
 	"net"
 	"net/url"
 	"time"
@@ -18,17 +19,17 @@ import (
 
 const name = "gelf"
 
-type GelfLogger struct {
+type gelfLogger struct {
 	writer *gelf.Writer
 	ctx    logger.Context
-	fields GelfFields
+	fields gelfFields
 }
 
-type GelfFields struct {
+type gelfFields struct {
 	hostname      string
-	containerId   string
+	containerID   string
 	containerName string
-	imageId       string
+	imageID       string
 	imageName     string
 	command       string
 	tag           string
@@ -39,8 +40,14 @@ func init() {
 	if err := logger.RegisterLogDriver(name, New); err != nil {
 		logrus.Fatal(err)
 	}
+	if err := logger.RegisterLogOptValidator(name, ValidateLogOpt); err != nil {
+		logrus.Fatal(err)
+	}
 }
 
+// New creates a gelf logger using the configuration passed in on the
+// context. Supported context configuration variables are
+// gelf-address, & gelf-tag.
 func New(ctx logger.Context) (logger.Logger, error) {
 	// parse gelf address
 	address, err := parseAddress(ctx.Config["gelf-address"])
@@ -57,11 +64,11 @@ func New(ctx logger.Context) (logger.Logger, error) {
 	// remove trailing slash from container name
 	containerName := bytes.TrimLeft([]byte(ctx.ContainerName), "/")
 
-	fields := GelfFields{
+	fields := gelfFields{
 		hostname:      hostname,
-		containerId:   ctx.ContainerID,
+		containerID:   ctx.ContainerID,
 		containerName: string(containerName),
-		imageId:       ctx.ContainerImageID,
+		imageID:       ctx.ContainerImageID,
 		imageName:     ctx.ContainerImageName,
 		command:       ctx.Command(),
 		tag:           ctx.Config["gelf-tag"],
@@ -74,14 +81,14 @@ func New(ctx logger.Context) (logger.Logger, error) {
 		return nil, fmt.Errorf("gelf: cannot connect to GELF endpoint: %s %v", address, err)
 	}
 
-	return &GelfLogger{
+	return &gelfLogger{
 		writer: gelfWriter,
 		ctx:    ctx,
 		fields: fields,
 	}, nil
 }
 
-func (s *GelfLogger) Log(msg *logger.Message) error {
+func (s *gelfLogger) Log(msg *logger.Message) error {
 	// remove trailing and leading whitespace
 	short := bytes.TrimSpace([]byte(msg.Line))
 
@@ -97,9 +104,9 @@ func (s *GelfLogger) Log(msg *logger.Message) error {
 		TimeUnix: float64(msg.Timestamp.UnixNano()/int64(time.Millisecond)) / 1000.0,
 		Level:    level,
 		Extra: map[string]interface{}{
-			"_container_id":   s.fields.containerId,
+			"_container_id":   s.fields.containerID,
 			"_container_name": s.fields.containerName,
-			"_image_id":       s.fields.imageId,
+			"_image_id":       s.fields.imageID,
 			"_image_name":     s.fields.imageName,
 			"_command":        s.fields.command,
 			"_tag":            s.fields.tag,
@@ -113,16 +120,26 @@ func (s *GelfLogger) Log(msg *logger.Message) error {
 	return nil
 }
 
-func (s *GelfLogger) GetReader() (io.Reader, error) {
-	return nil, logger.ReadLogsNotSupported
-}
-
-func (s *GelfLogger) Close() error {
+func (s *gelfLogger) Close() error {
 	return s.writer.Close()
 }
 
-func (s *GelfLogger) Name() string {
+func (s *gelfLogger) Name() string {
 	return name
+}
+
+// ValidateLogOpt looks for gelf specific log options gelf-address, &
+// gelf-tag.
+func ValidateLogOpt(cfg map[string]string) error {
+	for key := range cfg {
+		switch key {
+		case "gelf-address":
+		case "gelf-tag":
+		default:
+			return fmt.Errorf("unknown log opt '%s' for gelf log driver", key)
+		}
+	}
+	return nil
 }
 
 func parseAddress(address string) (string, error) {

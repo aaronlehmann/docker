@@ -25,8 +25,7 @@ for, so feel free to reach out to him even just to say "Hi!"
 ## Package Name
 
 If possible, your package should be called "docker". If that name is already
-taken, a second choice is "lxc-docker", but with the caveat that "LXC" is now an
-optional dependency (as noted below). Another possible choice is "docker.io".
+taken, a second choice is "docker-engine". Another possible choice is "docker.io".
 
 ## Official Build vs Distro Build
 
@@ -316,7 +315,7 @@ appropriate for your distro's init script to live there too!).
 In general, Docker should be run as root, similar to the following:
 
 ```bash
-docker -d
+docker daemon
 ```
 
 Generally, a `DOCKER_OPTS` variable of some kind is available for adding more

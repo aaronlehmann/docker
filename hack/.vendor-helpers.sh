@@ -12,8 +12,9 @@ clone() {
 	local vcs="$1"
 	local pkg="$2"
 	local rev="$3"
+	local url="$4"
 
-	local url="https://$pkg"
+	: ${url:=https://$pkg}
 	local target="vendor/src/$pkg"
 
 	echo -n "$pkg @ $rev: "
@@ -76,8 +77,10 @@ clean() {
 		'experimental'
 		"$dockerBuildTags"
 		"daemon $dockerBuildTags"
+		"daemon cgo $dockerBuildTags"
 		"experimental $dockerBuildTags"
 		"experimental daemon $dockerBuildTags"
+		"experimental daemon cgo $dockerBuildTags"
 	)
 
 	echo
@@ -97,7 +100,10 @@ clean() {
 	unset IFS
 
 	echo -n 'pruning unused packages, '
-	findArgs=()
+	findArgs=(
+		# This directory contains only .c and .h files which are necessary
+		-path vendor/src/github.com/mattn/go-sqlite3/code
+	)
 	for import in "${imports[@]}"; do
 		[ "${#findArgs[@]}" -eq 0 ] || findArgs+=( -or )
 		findArgs+=( -path "vendor/src/$import" )
@@ -106,12 +112,12 @@ clean() {
 	local prune=( $(find vendor -depth -type d -not '(' "${findArgs[@]}" ')') )
 	unset IFS
 	for dir in "${prune[@]}"; do
-		find "$dir" -maxdepth 1 -not -type d -exec rm -f '{}' +
+		find "$dir" -maxdepth 1 -not -type d -not -name 'LICENSE*' -not -name 'COPYING*' -exec rm -v -f '{}' +
 		rmdir "$dir" 2>/dev/null || true
 	done
 
 	echo -n 'pruning unused files, '
-	find vendor -type f -name '*_test.go' -exec rm '{}' +
+	find vendor -type f -name '*_test.go' -exec rm -v '{}' +
 
 	echo done
 }

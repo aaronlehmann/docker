@@ -1,4 +1,4 @@
-// +build linux
+// +build linux freebsd
 
 package sockets
 
@@ -11,9 +11,12 @@ import (
 
 	"github.com/Sirupsen/logrus"
 	"github.com/docker/docker/pkg/listenbuffer"
-	"github.com/docker/libcontainer/user"
+	"github.com/opencontainers/runc/libcontainer/user"
 )
 
+// NewUnixSocket creates a unix socket with the specified path and group.
+// The channel passed is used to activate the listenbuffer when the caller is ready
+// to accept connections.
 func NewUnixSocket(path, group string, activate <-chan struct{}) (net.Listener, error) {
 	if err := syscall.Unlink(path); err != nil && !os.IsNotExist(err) {
 		return nil, err

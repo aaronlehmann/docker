@@ -81,6 +81,7 @@ var (
 	testRepositories = map[string]map[string]string{
 		"foo42/bar": {
 			"latest": "42d718c941f5c532ac049bf0b0ab53f0062f09a03afd4aa4a02c098e46032b9d",
+			"test":   "42d718c941f5c532ac049bf0b0ab53f0062f09a03afd4aa4a02c098e46032b9d",
 		},
 	}
 	mockHosts = map[string][]net.IP{
@@ -144,7 +145,7 @@ func makeURL(req string) string {
 	return testHTTPServer.URL + req
 }
 
-func makeHttpsURL(req string) string {
+func makeHTTPSURL(req string) string {
 	return testHTTPSServer.URL + req
 }
 
@@ -155,16 +156,16 @@ func makeIndex(req string) *IndexInfo {
 	return index
 }
 
-func makeHttpsIndex(req string) *IndexInfo {
+func makeHTTPSIndex(req string) *IndexInfo {
 	index := &IndexInfo{
-		Name: makeHttpsURL(req),
+		Name: makeHTTPSURL(req),
 	}
 	return index
 }
 
 func makePublicIndex() *IndexInfo {
 	index := &IndexInfo{
-		Name:     IndexServerAddress(),
+		Name:     IndexServer,
 		Secure:   true,
 		Official: true,
 	}
@@ -467,7 +468,7 @@ func TestPing(t *testing.T) {
  * WARNING: Don't push on the repos uncommented, it'll block the tests
  *
 func TestWait(t *testing.T) {
-	logrus.Println("Test HTTP server ready and waiting:", testHttpServer.URL)
+	logrus.Println("Test HTTP server ready and waiting:", testHTTPServer.URL)
 	c := make(chan int)
 	<-c
 }

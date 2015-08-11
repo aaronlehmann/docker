@@ -10,11 +10,14 @@ import (
 	"time"
 
 	"github.com/docker/docker/daemon/execdriver/native/template"
-	"github.com/docker/libcontainer"
-	"github.com/docker/libcontainer/cgroups/fs"
-	"github.com/docker/libcontainer/configs"
+	"github.com/opencontainers/runc/libcontainer"
+	"github.com/opencontainers/runc/libcontainer/cgroups/fs"
+	"github.com/opencontainers/runc/libcontainer/configs"
 )
 
+// InitContainer is the initialization of a container config.
+// It returns the initial configs for a container. It's mostly
+// defined by the default template.
 func InitContainer(c *Command) *configs.Config {
 	container := template.New()
 
@@ -38,7 +41,7 @@ func InitContainer(c *Command) *configs.Config {
 
 func getEnv(key string, env []string) string {
 	for _, pair := range env {
-		parts := strings.Split(pair, "=")
+		parts := strings.SplitN(pair, "=", 2)
 		if parts[0] == key {
 			return parts[1]
 		}
@@ -46,18 +49,20 @@ func getEnv(key string, env []string) string {
 	return ""
 }
 
+// SetupCgroups setups cgroup resources for a container.
 func SetupCgroups(container *configs.Config, c *Command) error {
 	if c.Resources != nil {
-		container.Cgroups.CpuShares = c.Resources.CpuShares
+		container.Cgroups.CpuShares = c.Resources.CPUShares
 		container.Cgroups.Memory = c.Resources.Memory
 		container.Cgroups.MemoryReservation = c.Resources.Memory
 		container.Cgroups.MemorySwap = c.Resources.MemorySwap
 		container.Cgroups.CpusetCpus = c.Resources.CpusetCpus
 		container.Cgroups.CpusetMems = c.Resources.CpusetMems
-		container.Cgroups.CpuPeriod = c.Resources.CpuPeriod
-		container.Cgroups.CpuQuota = c.Resources.CpuQuota
+		container.Cgroups.CpuPeriod = c.Resources.CPUPeriod
+		container.Cgroups.CpuQuota = c.Resources.CPUQuota
 		container.Cgroups.BlkioWeight = c.Resources.BlkioWeight
 		container.Cgroups.OomKillDisable = c.Resources.OomKillDisable
+		container.Cgroups.MemorySwappiness = c.Resources.MemorySwappiness
 	}
 
 	return nil
@@ -108,6 +113,7 @@ func readSysfsNetworkStats(ethInterface, statsFile string) (uint64, error) {
 	return strconv.ParseUint(strings.TrimSpace(string(data)), 10, 64)
 }
 
+// Stats collects all the resource usage information from a container.
 func Stats(containerDir string, containerMemoryLimit int64, machineMemory int64) (*ResourceStats, error) {
 	f, err := os.Open(filepath.Join(containerDir, "state.json"))
 	if err != nil {

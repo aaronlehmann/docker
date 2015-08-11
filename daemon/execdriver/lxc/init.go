@@ -6,21 +6,21 @@ import (
 	"encoding/json"
 	"flag"
 	"fmt"
-	"log"
 	"os"
 	"os/exec"
 	"runtime"
 	"strings"
 	"syscall"
 
+	"github.com/Sirupsen/logrus"
 	"github.com/docker/docker/pkg/reexec"
 )
 
-// Args provided to the init function for a driver
+// InitArgs contains args provided to the init function for a driver
 type InitArgs struct {
 	User       string
 	Gateway    string
-	Ip         string
+	IP         string
 	WorkDir    string
 	Privileged bool
 	Env        []string
@@ -50,7 +50,7 @@ func initializer() {
 	args := getArgs()
 
 	if err := setupNamespace(args); err != nil {
-		log.Fatal(err)
+		logrus.Fatal(err)
 	}
 }
 
@@ -65,7 +65,7 @@ func setupNamespace(args *InitArgs) error {
 
 	path, err := exec.LookPath(args.Args[0])
 	if err != nil {
-		log.Printf("Unable to locate %v", args.Args[0])
+		logrus.Infof("Unable to locate %v", args.Args[0])
 		os.Exit(127)
 	}
 
@@ -94,7 +94,7 @@ func getArgs() *InitArgs {
 	return &InitArgs{
 		User:       *user,
 		Gateway:    *gateway,
-		Ip:         *ip,
+		IP:         *ip,
 		WorkDir:    *workDir,
 		Privileged: *privileged,
 		Args:       flag.Args(),

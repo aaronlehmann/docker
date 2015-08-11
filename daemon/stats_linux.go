@@ -2,16 +2,16 @@ package daemon
 
 import (
 	"github.com/docker/docker/api/types"
-	"github.com/docker/libcontainer"
-	"github.com/docker/libcontainer/cgroups"
+	"github.com/opencontainers/runc/libcontainer"
+	"github.com/opencontainers/runc/libcontainer/cgroups"
 )
 
-// convertToAPITypes converts the libcontainer.Stats to the api specific
+// convertStatsToAPITypes converts the libcontainer.Stats to the api specific
 // structs.  This is done to preserve API compatibility and versioning.
-func convertToAPITypes(ls *libcontainer.Stats) *types.Stats {
+func convertStatsToAPITypes(ls *libcontainer.Stats) *types.Stats {
 	s := &types.Stats{}
 	if ls.Interfaces != nil {
-		s.Network = types.Network{}
+		s.Network = types.NetworkStats{}
 		for _, iface := range ls.Interfaces {
 			s.Network.RxBytes += iface.RxBytes
 			s.Network.RxPackets += iface.RxPackets
@@ -37,8 +37,8 @@ func convertToAPITypes(ls *libcontainer.Stats) *types.Stats {
 			SectorsRecursive:        copyBlkioEntry(cs.BlkioStats.SectorsRecursive),
 		}
 		cpu := cs.CpuStats
-		s.CpuStats = types.CpuStats{
-			CpuUsage: types.CpuUsage{
+		s.CPUStats = types.CPUStats{
+			CPUUsage: types.CPUUsage{
 				TotalUsage:        cpu.CpuUsage.TotalUsage,
 				PercpuUsage:       cpu.CpuUsage.PercpuUsage,
 				UsageInKernelmode: cpu.CpuUsage.UsageInKernelmode,
@@ -52,10 +52,10 @@ func convertToAPITypes(ls *libcontainer.Stats) *types.Stats {
 		}
 		mem := cs.MemoryStats
 		s.MemoryStats = types.MemoryStats{
-			Usage:    mem.Usage,
-			MaxUsage: mem.MaxUsage,
+			Usage:    mem.Usage.Usage,
+			MaxUsage: mem.Usage.MaxUsage,
 			Stats:    mem.Stats,
-			Failcnt:  mem.Failcnt,
+			Failcnt:  mem.Usage.Failcnt,
 		}
 	}
 

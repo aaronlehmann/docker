@@ -5,12 +5,13 @@ import (
 	"encoding/json"
 	"fmt"
 	"io/ioutil"
-	"net"
 	"net/http"
 	"strings"
 	"time"
 
 	"github.com/Sirupsen/logrus"
+	"github.com/docker/docker/pkg/sockets"
+	"github.com/docker/docker/pkg/tlsconfig"
 )
 
 const (
@@ -18,18 +19,29 @@ const (
 	defaultTimeOut  = 30
 )
 
-func NewClient(addr string) *Client {
+// NewClient creates a new plugin client (http).
+func NewClient(addr string, tlsConfig tlsconfig.Options) (*Client, error) {
 	tr := &http.Transport{}
+
+	c, err := tlsconfig.Client(tlsConfig)
+	if err != nil {
+		return nil, err
+	}
+	tr.TLSClientConfig = c
+
 	protoAndAddr := strings.Split(addr, "://")
-	configureTCPTransport(tr, protoAndAddr[0], protoAndAddr[1])
-	return &Client{&http.Client{Transport: tr}, protoAndAddr[1]}
+	sockets.ConfigureTCPTransport(tr, protoAndAddr[0], protoAndAddr[1])
+	return &Client{&http.Client{Transport: tr}, protoAndAddr[1]}, nil
 }
 
+// Client represents a plugin client.
 type Client struct {
-	http *http.Client
-	addr string
+	http *http.Client // http client to use
+	addr string       // http address of the plugin
 }
 
+// Call calls the specified method with the specified arguments for the plugin.
+// It will retry for 30 seconds if a failure occurs when calling.
 func (c *Client) Call(serviceMethod string, args interface{}, ret interface{}) error {
 	return c.callWithRetry(serviceMethod, args, ret, true)
 }
@@ -94,20 +106,5 @@ func backoff(retries int) time.Duration {
 }
 
 func abort(start time.Time, timeOff time.Duration) bool {
-	return timeOff+time.Since(start) > time.Duration(defaultTimeOut)*time.Second
-}
-
-func configureTCPTransport(tr *http.Transport, proto, addr string) {
-	// Why 32? See https://github.com/docker/docker/pull/8035.
-	timeout := 32 * time.Second
-	if proto == "unix" {
-		// No need for compression in local communications.
-		tr.DisableCompression = true
-		tr.Dial = func(_, _ string) (net.Conn, error) {
-			return net.DialTimeout(proto, addr, timeout)
-		}
-	} else {
-		tr.Proxy = http.ProxyFromEnvironment
-		tr.Dial = (&net.Dialer{Timeout: timeout}).Dial
-	}
+	return timeOff+time.Since(start) >= time.Duration(defaultTimeOut)*time.Second
 }
