@@ -13,23 +13,22 @@ clone git github.com/go-check/check 64131543e7896d5bcc6bd5a76287eb75ea96c673
 clone git github.com/gorilla/context 14f550f51a
 clone git github.com/gorilla/mux e444e69cbd
 clone git github.com/kr/pty 5cf931ef8f
-clone git github.com/microsoft/hcsshim f674a70f1306dbe20b3a516bedd3285d85db60d9
 clone git github.com/mattn/go-sqlite3 b4142c444a8941d0d92b0b7103a24df9cd815e42
+clone git github.com/microsoft/hcsshim da093dac579302d7b413696b96dec0b5e1bce8d4
 clone git github.com/mistifyio/go-zfs v2.1.1
-clone git github.com/natefinch/npipe 0938d701e50e580f5925c773055eb6d6b32a0cbc
 clone git github.com/tchap/go-patricia v2.1.0
 clone git golang.org/x/net 3cffabab72adf04f8e3b01c5baf775361837b5fe https://github.com/golang/net.git
 clone hg code.google.com/p/gosqlite 74691fb6f837
 
 #get libnetwork packages
-clone git github.com/docker/libnetwork bd3eecc96f3c05a4acef1bedcf74397bc6850d22
+clone git github.com/docker/libnetwork 22dc04d06067b40a9e7ef575aee6d1bb69d4dcc3
 clone git github.com/armon/go-metrics eb0af217e5e9747e41dd5303755356b62d28e3ec
 clone git github.com/hashicorp/go-msgpack 71c2886f5a673a35f909803f38ece5810165097b
 clone git github.com/hashicorp/memberlist 9a1e242e454d2443df330bdd51a436d5a9058fc4
 clone git github.com/hashicorp/serf 7151adcef72687bf95f451a2e0ba15cb19412bf2
 clone git github.com/docker/libkv 60c7c881345b3c67defc7f93a8297debf041d43c
 clone git github.com/vishvananda/netns 493029407eeb434d0c2d44e02ea072ff2488d322
-clone git github.com/vishvananda/netlink 20397a138846e4d6590e01783ed023ed7e1c38a6
+clone git github.com/vishvananda/netlink 4b5dce31de6d42af5bb9811c6d265472199e0fec
 clone git github.com/BurntSushi/toml f706d00e3de6abe700c994cdd545a1a4915af060
 clone git github.com/samuel/go-zookeeper d0e0d8e11f318e000a8cc434616d69e329edc374
 clone git github.com/coreos/go-etcd v2.0.0
@@ -40,7 +39,7 @@ clone git github.com/docker/distribution 7dc8d4a26b689bd4892f2f2322dbce0b7119d68
 clone git github.com/vbatts/tar-split v0.9.4
 
 clone git github.com/docker/notary 8e8122eb5528f621afcd4e2854c47302f17392f7
-clone git github.com/endophage/gotuf 89ceb27829b9353dfee5ccccf7a3a9bb77008b05
+clone git github.com/endophage/gotuf a592b03b28b02bb29bb5878308fb1abed63383b5
 clone git github.com/tent/canonical-json-go 96e4ba3a7613a1216cbd1badca4efe382adea337
 clone git github.com/agl/ed25519 d2b94fd789ea21d12fac1a4443dd3a3f79cda72c
 

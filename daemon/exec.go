@@ -152,6 +152,7 @@ func (d *Daemon) ContainerExecCreate(config *runconfig.ExecConfig) (string, erro
 		Entrypoint: entrypoint,
 		Arguments:  args,
 		User:       user,
+		Privileged: config.Privileged,
 	}
 
 	execConfig := &execConfig{
@@ -175,7 +176,6 @@ func (d *Daemon) ContainerExecCreate(config *runconfig.ExecConfig) (string, erro
 }
 
 func (d *Daemon) ContainerExecStart(execName string, stdin io.ReadCloser, stdout io.Writer, stderr io.Writer) error {
-
 	var (
 		cStdin           io.ReadCloser
 		cStdout, cStderr io.Writer
@@ -246,12 +246,18 @@ func (d *Daemon) ContainerExecStart(execName string, stdin io.ReadCloser, stdout
 		if err != nil {
 			return fmt.Errorf("attach failed with error: %s", err)
 		}
-		break
+		return nil
 	case err := <-execErr:
+		if err == nil {
+			return nil
+		}
+
+		// Maybe the container stopped while we were trying to exec
+		if !container.IsRunning() {
+			return fmt.Errorf("container stopped while running exec")
+		}
 		return err
 	}
-
-	return nil
 }
 
 func (d *Daemon) Exec(c *Container, execConfig *execConfig, pipes *execdriver.Pipes, startCallback execdriver.StartCallback) (int, error) {

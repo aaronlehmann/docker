@@ -5,6 +5,7 @@ description = "The daemon command description and usage"
 keywords = ["container, daemon, runtime"]
 [menu.main]
 parent = "smn_cli"
+weight=1
 +++
 <![end-metadata]-->
 
@@ -32,7 +33,7 @@ parent = "smn_cli"
       -G, --group="docker"                   Group for the unix socket
       -g, --graph="/var/lib/docker"          Root of the Docker runtime
       -H, --host=[]                          Daemon socket(s) to connect to
-      -h, --help=false                       Print usage
+      --help=false                           Print usage
       --icc=true                             Enable inter-container communication
       --insecure-registry=[]                 Enable insecure registry communication
       --ip=0.0.0.0                           Default IP when binding container ports

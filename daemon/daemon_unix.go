@@ -14,7 +14,6 @@ import (
 	"github.com/Sirupsen/logrus"
 	"github.com/docker/docker/autogen/dockerversion"
 	"github.com/docker/docker/daemon/graphdriver"
-	"github.com/docker/docker/pkg/archive"
 	"github.com/docker/docker/pkg/fileutils"
 	"github.com/docker/docker/pkg/parsers"
 	"github.com/docker/docker/pkg/parsers/kernel"
@@ -39,16 +38,6 @@ const (
 	platformSupported = true
 )
 
-func (daemon *Daemon) Changes(container *Container) ([]archive.Change, error) {
-	initID := fmt.Sprintf("%s-init", container.ID)
-	return daemon.driver.Changes(container.ID, initID)
-}
-
-func (daemon *Daemon) Diff(container *Container) (archive.Archive, error) {
-	initID := fmt.Sprintf("%s-init", container.ID)
-	return daemon.driver.Diff(container.ID, initID)
-}
-
 func parseSecurityOpt(container *Container, config *runconfig.HostConfig) error {
 	var (
 		labelOpts []string
@@ -72,36 +61,6 @@ func parseSecurityOpt(container *Container, config *runconfig.HostConfig) error 
 
 	container.ProcessLabel, container.MountLabel, err = label.InitLabels(labelOpts)
 	return err
-}
-
-func (daemon *Daemon) createRootfs(container *Container) error {
-	// Step 1: create the container directory.
-	// This doubles as a barrier to avoid race conditions.
-	if err := os.Mkdir(container.root, 0700); err != nil {
-		return err
-	}
-	initID := fmt.Sprintf("%s-init", container.ID)
-	if err := daemon.driver.Create(initID, container.ImageID); err != nil {
-		return err
-	}
-	initPath, err := daemon.driver.Get(initID, "")
-	if err != nil {
-		return err
-	}
-
-	if err := setupInitLayer(initPath); err != nil {
-		daemon.driver.Put(initID)
-		return err
-	}
-
-	// We want to unmount init layer before we take snapshot of it
-	// for the actual container.
-	daemon.driver.Put(initID)
-
-	if err := daemon.driver.Create(container.ID, initID); err != nil {
-		return err
-	}
-	return nil
 }
 
 func checkKernel() error {
@@ -151,7 +110,7 @@ func (daemon *Daemon) adaptContainerSettings(hostConfig *runconfig.HostConfig, a
 // hostconfig and config structures.
 func verifyPlatformContainerSettings(daemon *Daemon, hostConfig *runconfig.HostConfig, config *runconfig.Config) ([]string, error) {
 	warnings := []string{}
-	sysInfo := sysinfo.New(false)
+	sysInfo := sysinfo.New(true)
 
 	if hostConfig.LxcConf.Len() > 0 && !strings.Contains(daemon.ExecutionDriver().Name(), "lxc") {
 		return warnings, fmt.Errorf("Cannot use --lxc-conf with execdriver: %s", daemon.ExecutionDriver().Name())
@@ -392,19 +351,19 @@ func initNetworkController(config *Config) (libnetwork.NetworkController, error)
 
 func initBridgeDriver(controller libnetwork.NetworkController, config *Config) error {
 	option := options.Generic{
-		"EnableIPForwarding": config.Bridge.EnableIPForward}
+		"EnableIPForwarding":  config.Bridge.EnableIPForward,
+		"EnableIPTables":      config.Bridge.EnableIPTables,
+		"EnableUserlandProxy": config.Bridge.EnableUserlandProxy}
 
 	if err := controller.ConfigureNetworkDriver("bridge", options.Generic{netlabel.GenericData: option}); err != nil {
 		return fmt.Errorf("Error initializing bridge driver: %v", err)
 	}
 
 	netOption := options.Generic{
-		"BridgeName":          config.Bridge.Iface,
-		"Mtu":                 config.Mtu,
-		"EnableIPTables":      config.Bridge.EnableIPTables,
-		"EnableIPMasquerade":  config.Bridge.EnableIPMasq,
-		"EnableICC":           config.Bridge.InterContainerCommunication,
-		"EnableUserlandProxy": config.Bridge.EnableUserlandProxy,
+		"BridgeName":         config.Bridge.Iface,
+		"Mtu":                config.Mtu,
+		"EnableIPMasquerade": config.Bridge.EnableIPMasq,
+		"EnableICC":          config.Bridge.InterContainerCommunication,
 	}
 
 	if config.Bridge.IP != "" {
