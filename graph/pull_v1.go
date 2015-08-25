@@ -138,16 +138,21 @@ func (p *v1Puller) pullRepository(askedTag string) error {
 			}
 
 			// ensure no two downloads of the same image happen at the same time
-			broadcaster, found := p.poolAdd("pull", "img:"+img.ID)
+			poolKey := "img:" + img.ID
+			broadcaster, found := p.poolAdd("pull", poolKey)
 			if found {
 				broadcaster.Add(out)
-				broadcaster.Wait()
+				result := broadcaster.Wait()
+				if err, ok := result.(error); ok {
+					errors <- err
+					return
+				}
 				out.Write(p.sf.FormatProgress(stringid.TruncateID(img.ID), "Download complete", nil))
 				errors <- nil
 				return
 			}
 			broadcaster.Add(out)
-			defer p.poolRemove("pull", "img:"+img.ID)
+			defer p.poolRemove("pull", poolKey, nil)
 
 			// we need to retain it until tagging
 			p.graph.Retain(sessionID, img.ID)
@@ -188,6 +193,7 @@ func (p *v1Puller) pullRepository(askedTag string) error {
 				err := fmt.Errorf("Error pulling image (%s) from %s, %v", img.Tag, p.repoInfo.CanonicalName, lastErr)
 				broadcaster.Write(p.sf.FormatProgress(stringid.TruncateID(img.ID), err.Error(), nil))
 				errors <- err
+				broadcaster.Close(err)
 				return
 			}
 			broadcaster.Write(p.sf.FormatProgress(stringid.TruncateID(img.ID), "Download complete", nil))
@@ -225,8 +231,9 @@ func (p *v1Puller) pullRepository(askedTag string) error {
 	return nil
 }
 
-func (p *v1Puller) pullImage(out io.Writer, imgID, endpoint string, token []string) (bool, error) {
-	history, err := p.session.GetRemoteHistory(imgID, endpoint)
+func (p *v1Puller) pullImage(out io.Writer, imgID, endpoint string, token []string) (layersDownloaded bool, err error) {
+	var history []string
+	history, err = p.session.GetRemoteHistory(imgID, endpoint)
 	if err != nil {
 		return false, err
 	}
@@ -239,23 +246,38 @@ func (p *v1Puller) pullImage(out io.Writer, imgID, endpoint string, token []stri
 	p.graph.Retain(sessionID, history[1:]...)
 	defer p.graph.Release(sessionID, history[1:]...)
 
-	layersDownloaded := false
+	layersDownloaded = false
 	for i := len(history) - 1; i >= 0; i-- {
 		id := history[i]
 
 		// ensure no two downloads of the same layer happen at the same time
-		broadcaster, found := p.poolAdd("pull", "layer:"+id)
+		poolKey := "layer:" + id
+		transferBroadcaster, found := p.poolAdd("pull", poolKey)
 		if found {
 			logrus.Debugf("Image (id: %s) pull is already running, skipping", id)
-			broadcaster.Add(out)
-			broadcaster.Wait()
-		} else {
-			broadcaster.Add(out)
+			transferBroadcaster.Add(out)
+			result := transferBroadcaster.Wait()
+			switch v := result.(type) {
+			case error:
+				return layersDownloaded, v
+			case *progressreader.Broadcaster:
+				v.Add(out)
+				v.Wait()
+			}
+			continue
 		}
-		defer p.poolRemove("pull", "layer:"+id)
+
+		transferBroadcaster.Add(out)
+		defer func() {
+			if err != nil {
+				p.poolRemove("pull", poolKey, err)
+			} else {
+				p.poolRemove("pull", poolKey, nil)
+			}
+		}()
 
 		if !p.graph.Exists(id) {
-			broadcaster.Write(p.sf.FormatProgress(stringid.TruncateID(id), "Pulling metadata", nil))
+			transferBroadcaster.Write(p.sf.FormatProgress(stringid.TruncateID(id), "Pulling metadata", nil))
 			var (
 				imgJSON []byte
 				imgSize int64
@@ -266,7 +288,7 @@ func (p *v1Puller) pullImage(out io.Writer, imgID, endpoint string, token []stri
 			for j := 1; j <= retries; j++ {
 				imgJSON, imgSize, err = p.session.GetRemoteImageJSON(id, endpoint)
 				if err != nil && j == retries {
-					broadcaster.Write(p.sf.FormatProgress(stringid.TruncateID(id), "Error pulling dependent layers", nil))
+					transferBroadcaster.Write(p.sf.FormatProgress(stringid.TruncateID(id), "Error pulling dependent layers", nil))
 					return layersDownloaded, err
 				} else if err != nil {
 					time.Sleep(time.Duration(j) * 500 * time.Millisecond)
@@ -275,7 +297,7 @@ func (p *v1Puller) pullImage(out io.Writer, imgID, endpoint string, token []stri
 				img, err = image.NewImgJSON(imgJSON)
 				layersDownloaded = true
 				if err != nil && j == retries {
-					broadcaster.Write(p.sf.FormatProgress(stringid.TruncateID(id), "Error pulling dependent layers", nil))
+					transferBroadcaster.Write(p.sf.FormatProgress(stringid.TruncateID(id), "Error pulling dependent layers", nil))
 					return layersDownloaded, fmt.Errorf("Failed to parse json: %s", err)
 				} else if err != nil {
 					time.Sleep(time.Duration(j) * 500 * time.Millisecond)
@@ -291,7 +313,7 @@ func (p *v1Puller) pullImage(out io.Writer, imgID, endpoint string, token []stri
 				if j > 1 {
 					status = fmt.Sprintf("Pulling fs layer [retries: %d]", j)
 				}
-				broadcaster.Write(p.sf.FormatProgress(stringid.TruncateID(id), status, nil))
+				transferBroadcaster.Write(p.sf.FormatProgress(stringid.TruncateID(id), status, nil))
 				layer, err := p.session.GetRemoteImageLayer(img.ID, endpoint, imgSize)
 				if uerr, ok := err.(*url.Error); ok {
 					err = uerr.Err
@@ -300,7 +322,7 @@ func (p *v1Puller) pullImage(out io.Writer, imgID, endpoint string, token []stri
 					time.Sleep(time.Duration(j) * 500 * time.Millisecond)
 					continue
 				} else if err != nil {
-					broadcaster.Write(p.sf.FormatProgress(stringid.TruncateID(id), "Error pulling dependent layers", nil))
+					transferBroadcaster.Write(p.sf.FormatProgress(stringid.TruncateID(id), "Error pulling dependent layers", nil))
 					return layersDownloaded, err
 				}
 				layersDownloaded = true
@@ -309,7 +331,7 @@ func (p *v1Puller) pullImage(out io.Writer, imgID, endpoint string, token []stri
 				err = p.graph.Register(img,
 					progressreader.New(progressreader.Config{
 						In:        layer,
-						Out:       broadcaster,
+						Out:       transferBroadcaster,
 						Formatter: p.sf,
 						Size:      imgSize,
 						NewLines:  false,
@@ -320,14 +342,15 @@ func (p *v1Puller) pullImage(out io.Writer, imgID, endpoint string, token []stri
 					time.Sleep(time.Duration(j) * 500 * time.Millisecond)
 					continue
 				} else if err != nil {
-					broadcaster.Write(p.sf.FormatProgress(stringid.TruncateID(id), "Error downloading dependent layers", nil))
+					transferBroadcaster.Write(p.sf.FormatProgress(stringid.TruncateID(id), "Error downloading dependent layers", nil))
 					return layersDownloaded, err
 				} else {
 					break
 				}
 			}
 		}
-		broadcaster.Write(p.sf.FormatProgress(stringid.TruncateID(id), "Download complete", nil))
+		transferBroadcaster.Write(p.sf.FormatProgress(stringid.TruncateID(id), "Download complete", nil))
+		transferBroadcaster.Close(nil)
 	}
 	return layersDownloaded, nil
 }

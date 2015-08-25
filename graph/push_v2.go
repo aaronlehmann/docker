@@ -60,7 +60,7 @@ func (p *v2Pusher) pushV2Repository(tag string) error {
 	if _, found := p.poolAdd("push", localName); found {
 		return fmt.Errorf("push or pull %s is already in progress", localName)
 	}
-	defer p.poolRemove("push", localName)
+	defer p.poolRemove("push", localName, nil)
 
 	tags, err := p.getImageTags(tag)
 	if err != nil {

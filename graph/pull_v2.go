@@ -74,14 +74,22 @@ func (p *v2Puller) pullV2Repository(tag string) (err error) {
 	}
 
 	broadcaster, found := p.poolAdd("pull", taggedName)
+	broadcaster.Add(p.config.OutStream)
 	if found {
 		// Another pull of the same repository is already taking place; just wait for it to finish
-		broadcaster.Add(p.config.OutStream)
-		broadcaster.Wait()
+		result := broadcaster.Wait()
+		if err, ok := result.(error); ok {
+			return err
+		}
 		return nil
 	}
-	defer p.poolRemove("pull", taggedName)
-	broadcaster.Add(p.config.OutStream)
+	defer func() {
+		if err != nil {
+			p.poolRemove("pull", taggedName, err)
+		} else {
+			p.poolRemove("pull", taggedName, nil)
+		}
+	}()
 
 	var layersDownloaded bool
 	for _, tag := range tags {
@@ -101,13 +109,15 @@ func (p *v2Puller) pullV2Repository(tag string) (err error) {
 
 // downloadInfo is used to pass information from download to extractor
 type downloadInfo struct {
-	img     *image.Image
-	tmpFile *os.File
-	digest  digest.Digest
-	layer   distribution.ReadSeekCloser
-	size    int64
-	err     chan error
-	out     io.Writer // Download progress is written here.
+	img                   *image.Image
+	tmpFile               *os.File
+	digest                digest.Digest
+	layer                 distribution.ReadSeekCloser
+	size                  int64
+	err                   chan error
+	out                   io.Writer // Download progress is written here.
+	poolKey               string
+	extractionBroadcaster *progressreader.Broadcaster
 }
 
 type errVerification struct{}
@@ -119,20 +129,27 @@ func (p *v2Puller) download(di *downloadInfo) {
 
 	out := di.out
 
-	broadcaster, found := p.poolAdd("pull", "img:"+di.img.ID)
+	di.poolKey = "layer:" + di.img.ID
+	transferBroadcaster, found := p.poolAdd("pull", di.poolKey)
+	transferBroadcaster.Add(out)
 	if found {
-		broadcaster.Add(out)
-		broadcaster.Wait()
+		result := transferBroadcaster.Wait()
+		switch v := result.(type) {
+		case error:
+			di.err <- v
+			return
+		case *progressreader.Broadcaster:
+			di.extractionBroadcaster = v
+		}
 		out.Write(p.sf.FormatProgress(stringid.TruncateID(di.img.ID), "Download complete", nil))
 		di.err <- nil
 		return
 	}
 
-	broadcaster.Add(out)
-	defer p.poolRemove("pull", "img:"+di.img.ID)
 	tmpFile, err := ioutil.TempFile("", "GetImageBlob")
 	if err != nil {
 		di.err <- err
+		transferBroadcaster.Close(err)
 		return
 	}
 	di.tmpFile = tmpFile
@@ -143,6 +160,7 @@ func (p *v2Puller) download(di *downloadInfo) {
 	if err != nil {
 		logrus.Debugf("Error statting layer: %v", err)
 		di.err <- err
+		transferBroadcaster.Close(err)
 		return
 	}
 	di.size = desc.Size
@@ -151,6 +169,7 @@ func (p *v2Puller) download(di *downloadInfo) {
 	if err != nil {
 		logrus.Debugf("Error fetching layer: %v", err)
 		di.err <- err
+		transferBroadcaster.Close(err)
 		return
 	}
 	defer layerDownload.Close()
@@ -158,12 +177,13 @@ func (p *v2Puller) download(di *downloadInfo) {
 	verifier, err := digest.NewDigestVerifier(di.digest)
 	if err != nil {
 		di.err <- err
+		transferBroadcaster.Close(err)
 		return
 	}
 
 	reader := progressreader.New(progressreader.Config{
 		In:        ioutil.NopCloser(io.TeeReader(layerDownload, verifier)),
-		Out:       broadcaster,
+		Out:       transferBroadcaster,
 		Formatter: p.sf,
 		Size:      di.size,
 		NewLines:  false,
@@ -172,21 +192,24 @@ func (p *v2Puller) download(di *downloadInfo) {
 	})
 	io.Copy(tmpFile, reader)
 
-	broadcaster.Write(p.sf.FormatProgress(stringid.TruncateID(di.img.ID), "Verifying Checksum", nil))
+	transferBroadcaster.Write(p.sf.FormatProgress(stringid.TruncateID(di.img.ID), "Verifying Checksum", nil))
 
 	if !verifier.Verified() {
 		err = fmt.Errorf("filesystem layer verification failed for digest %s", di.digest)
 		logrus.Error(err)
 		di.err <- err
+		transferBroadcaster.Close(err)
 		return
 	}
 
-	broadcaster.Write(p.sf.FormatProgress(stringid.TruncateID(di.img.ID), "Download complete", nil))
+	transferBroadcaster.Write(p.sf.FormatProgress(stringid.TruncateID(di.img.ID), "Download complete", nil))
 
 	logrus.Debugf("Downloaded %s to tempfile %s", di.img.ID, tmpFile.Name())
 	di.layer = layerDownload
 
+	di.extractionBroadcaster = progressreader.NewBroadcaster()
 	di.err <- nil
+	transferBroadcaster.Close(di.extractionBroadcaster)
 }
 
 func (p *v2Puller) pullV2Tag(out io.Writer, tag, taggedName string) (verified bool, err error) {
@@ -276,6 +299,14 @@ func (p *v2Puller) pullV2Tag(out io.Writer, tag, taggedName string) (verified bo
 	// run clean for all downloads to prevent leftovers
 	for _, d := range downloads {
 		defer func(d *downloadInfo) {
+			if d.extractionBroadcaster != nil {
+				if err != nil {
+					d.extractionBroadcaster.Close(err)
+				} else {
+					d.extractionBroadcaster.Close(nil)
+				}
+			}
+			p.poolRemove("pull", d.poolKey, nil)
 			if d.tmpFile != nil {
 				d.tmpFile.Close()
 				if err := os.RemoveAll(d.tmpFile.Name()); err != nil {
@@ -290,14 +321,27 @@ func (p *v2Puller) pullV2Tag(out io.Writer, tag, taggedName string) (verified bo
 		if err := <-d.err; err != nil {
 			return false, err
 		}
+
 		if d.layer == nil {
+			// A different pull downloaded this layer, and we
+			// waited for it. Wait a second time, this time for the
+			// extraction to happen.
+			if d.extractionBroadcaster != nil {
+				d.extractionBroadcaster.Add(out)
+				result := d.extractionBroadcaster.Wait()
+				if extractionErr, ok := result.(error); ok {
+					return false, extractionErr
+				}
+			}
 			continue
 		}
-		// if tmpFile is empty assume download and extracted elsewhere
+
+		d.extractionBroadcaster.Add(out)
+
 		d.tmpFile.Seek(0, 0)
 		reader := progressreader.New(progressreader.Config{
 			In:        d.tmpFile,
-			Out:       out,
+			Out:       d.extractionBroadcaster,
 			Formatter: p.sf,
 			Size:      d.size,
 			NewLines:  false,
@@ -307,15 +351,17 @@ func (p *v2Puller) pullV2Tag(out io.Writer, tag, taggedName string) (verified bo
 
 		err = p.graph.Register(d.img, reader)
 		if err != nil {
+			d.extractionBroadcaster.Close(err)
 			return false, err
 		}
 
 		if err := p.graph.SetDigest(d.img.ID, d.digest); err != nil {
+			d.extractionBroadcaster.Close(err)
 			return false, err
 		}
 
-		// FIXME: Pool release here for parallel tag pull (ensures any downloads block until fully extracted)
-		out.Write(p.sf.FormatProgress(stringid.TruncateID(d.img.ID), "Pull complete", nil))
+		d.extractionBroadcaster.Write(p.sf.FormatProgress(stringid.TruncateID(d.img.ID), "Pull complete", nil))
+		d.extractionBroadcaster.Close(nil)
 		tagUpdated = true
 	}
 

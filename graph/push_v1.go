@@ -231,7 +231,7 @@ func (p *v1Pusher) pushRepository(tag string) error {
 	if _, found := p.poolAdd("push", p.repoInfo.LocalName); found {
 		return fmt.Errorf("push or pull %s is already in progress", p.repoInfo.LocalName)
 	}
-	defer p.poolRemove("push", p.repoInfo.LocalName)
+	defer p.poolRemove("push", p.repoInfo.LocalName, nil)
 
 	// Register all the images in a repository with the registry
 	// If an image is not in this list it will not be associated with the repository

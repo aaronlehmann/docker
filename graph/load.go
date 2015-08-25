@@ -13,6 +13,7 @@ import (
 	"github.com/docker/docker/image"
 	"github.com/docker/docker/pkg/archive"
 	"github.com/docker/docker/pkg/chrootarchive"
+	"github.com/docker/docker/pkg/progressreader"
 )
 
 // Load uploads a set of images into the repository. This is the complementary of ImageExport.
@@ -106,13 +107,21 @@ func (s *TagStore) recursiveLoad(address, tmpImageDir string) error {
 		}
 
 		// ensure no two downloads of the same layer happen at the same time
-		if ps, found := s.poolAdd("pull", "layer:"+img.ID); found {
+		poolKey := "layer:" + img.ID
+		transferBroadcaster, found := s.poolAdd("pull", poolKey)
+		if found {
 			logrus.Debugf("Image (id: %s) load is already running, waiting", img.ID)
-			ps.Wait()
+			result := transferBroadcaster.Wait()
+			switch v := result.(type) {
+			case error:
+				return v
+			case *progressreader.Broadcaster:
+				v.Wait()
+			}
 			return nil
 		}
 
-		defer s.poolRemove("pull", "layer:"+img.ID)
+		defer s.poolRemove("pull", poolKey, nil)
 
 		if img.Parent != "" {
 			if !s.graph.Exists(img.Parent) {

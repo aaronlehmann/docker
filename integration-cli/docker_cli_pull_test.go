@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"os/exec"
 	"strings"
+	"sync"
 	"time"
 
 	"io/ioutil"
@@ -36,6 +37,126 @@ func (s *DockerRegistrySuite) TestPullImageWithAliases(c *check.C) {
 	for _, repo := range repos[1:] {
 		if _, _, err := dockerCmdWithError("inspect", repo); err == nil {
 			c.Fatalf("Image %v shouldn't have been pulled down", repo)
+		}
+	}
+}
+
+// TestConcurrentPullWholeRepo runs pulls multiple tags from the same repo
+// concurrently.
+func (s *DockerRegistrySuite) TestConcurrentPullWholeRepo(c *check.C) {
+	repoName := fmt.Sprintf("%v/dockercli/busybox", privateRegistryURL)
+
+	repos := []string{}
+	for _, tag := range []string{"recent", "fresh", "todays"} {
+		repo := fmt.Sprintf("%v:%v", repoName, tag)
+		_, err := buildImage(repo, fmt.Sprintf(`
+		    FROM busybox
+		    ENTRYPOINT ["/bin/echo"]
+		    ENV FOO foo
+		    ENV BAR bar
+		    CMD echo %s
+		`, repo), true)
+		if err != nil {
+			c.Fatal(err)
+		}
+		dockerCmd(c, "push", repo)
+		repos = append(repos, repo)
+	}
+
+	// Clear local images store.
+	args := append([]string{"rmi"}, repos...)
+	dockerCmd(c, args...)
+
+	// Run multiple re-pulls concurrently
+	var wg sync.WaitGroup
+
+	for i := 0; i != 3; i++ {
+		wg.Add(1)
+		go func() {
+			dockerCmd(c, "pull", "-a", repoName)
+			wg.Done()
+		}()
+	}
+
+	wg.Wait()
+
+	// Ensure all tags were pulled successfully
+	for _, repo := range repos {
+		dockerCmd(c, "inspect", repo)
+		out, _ := dockerCmd(c, "run", "--rm", repo)
+		if strings.TrimSpace(out) != "/bin/sh -c echo "+repo {
+			c.Fatalf("CMD did not contain /bin/sh -c echo %s: %s", repo, out)
+		}
+	}
+}
+
+// TestConcurrentFailingPull tries a concurrent pull that doesn't succeed.
+func (s *DockerRegistrySuite) TestConcurrentFailingPull(c *check.C) {
+	repoName := fmt.Sprintf("%v/dockercli/busybox", privateRegistryURL)
+
+	// Run multiple re-pulls concurrently
+	var wg sync.WaitGroup
+
+	for i := 0; i != 3; i++ {
+		wg.Add(1)
+		go func() {
+			// Using dockerCmd causes a deadlock here
+			_, _, err := dockerCmdWithError("pull", repoName+":asdfasdf")
+			if err == nil {
+				c.Fatal("expected pull to fail")
+			}
+			wg.Done()
+		}()
+	}
+
+	wg.Wait()
+}
+
+// TestConcurrentPullMultipleTags pulls multiple tags from the same repo
+// concurrently.
+func (s *DockerRegistrySuite) TestConcurrentPullMultipleTags(c *check.C) {
+	repoName := fmt.Sprintf("%v/dockercli/busybox", privateRegistryURL)
+
+	repos := []string{}
+	for _, tag := range []string{"recent", "fresh", "todays"} {
+		repo := fmt.Sprintf("%v:%v", repoName, tag)
+		_, err := buildImage(repo, fmt.Sprintf(`
+		    FROM busybox
+		    ENTRYPOINT ["/bin/echo"]
+		    ENV FOO foo
+		    ENV BAR bar
+		    CMD echo %s
+		`, repo), true)
+		if err != nil {
+			c.Fatal(err)
+		}
+		dockerCmd(c, "push", repo)
+		repos = append(repos, repo)
+	}
+
+	// Clear local images store.
+	args := append([]string{"rmi"}, repos...)
+	dockerCmd(c, args...)
+
+	// Re-pull individual tags, in parallel
+	var wg sync.WaitGroup
+
+	for _, repo := range repos {
+		wg.Add(1)
+		go func(repo string) {
+			dockerCmd(c, "pull", repo)
+			wg.Done()
+		}(repo)
+	}
+
+	wg.Wait()
+
+	// Ensure all tags were pulled successfully
+	for _, repo := range repos {
+		dockerCmd(c, "inspect", repo)
+		out, _ := dockerCmd(c, "run", "--rm", repo)
+		if strings.TrimSpace(out) != "/bin/sh -c echo "+repo {
+			c.Fatalf("CMD did not contain /bin/sh -c echo %s: %s", repo, out)
 		}
 	}
 }

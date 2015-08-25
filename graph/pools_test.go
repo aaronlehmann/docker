@@ -29,16 +29,16 @@ func TestPools(t *testing.T) {
 	if _, found := s.poolAdd("pull", "test1"); !found {
 		t.Fatalf("Expected pull test1 to be in progress`")
 	}
-	if err := s.poolRemove("pull", "test2"); err != nil {
+	if err := s.poolRemove("pull", "test2", nil); err != nil {
 		t.Fatal(err)
 	}
-	if err := s.poolRemove("pull", "test2"); err != nil {
+	if err := s.poolRemove("pull", "test2", nil); err != nil {
 		t.Fatal(err)
 	}
-	if err := s.poolRemove("pull", "test1"); err != nil {
+	if err := s.poolRemove("pull", "test1", nil); err != nil {
 		t.Fatal(err)
 	}
-	if err := s.poolRemove("push", "test1"); err != nil {
+	if err := s.poolRemove("push", "test1", nil); err != nil {
 		t.Fatal(err)
 	}
 }
