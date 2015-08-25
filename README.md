@@ -1,12 +1,12 @@
-Docker: the Linux container engine
-==================================
+Docker: the container engine
+============================
 
 Docker is an open source project to pack, ship and run any application
 as a lightweight container.
 
 Docker containers are both *hardware-agnostic* and *platform-agnostic*.
 This means they can run anywhere, from your laptop to the largest
-EC2 compute instance and everything in between - and they don't require
+cloud compute instance and everything in between - and they don't require
 you to use a particular language, framework or packaging system. That
 makes them great building blocks for deploying and scaling web apps,
 databases, and backend services without depending on a particular stack
@@ -174,7 +174,7 @@ Under the hood, Docker is built on the following components:
   capabilities of the Linux kernel
 * The [Go](https://golang.org) programming language
 * The [Docker Image Specification](https://github.com/docker/docker/blob/master/image/spec/v1.md)
-* The [Libcontainer Specification](https://github.com/docker/libcontainer/blob/master/SPEC.md)
+* The [Libcontainer Specification](https://github.com/opencontainers/runc/blob/master/libcontainer/SPEC.md)
 
 Contributing to Docker
 ======================

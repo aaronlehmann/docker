@@ -140,6 +140,13 @@ func (rp *RestartPolicy) IsOnFailure() bool {
 	return rp.Name == "on-failure"
 }
 
+// IsUnlessStopped indicates whether the container has the
+// "unless-stopped" restart policy. This means the container will
+// automatically restart unless user has put it to stopped state.
+func (rp *RestartPolicy) IsUnlessStopped() bool {
+	return rp.Name == "unless-stopped"
+}
+
 // LogConfig represents the logging configuration of the container.
 type LogConfig struct {
 	Type   string
@@ -265,6 +272,7 @@ type HostConfig struct {
 	LxcConf          *LxcConfig       // Additional lxc configuration
 	Memory           int64            // Memory limit (in bytes)
 	MemorySwap       int64            // Total memory usage (memory + swap); set `-1` to disable swap
+	KernelMemory     int64            // Kernel memory limit (in bytes)
 	CPUShares        int64            `json:"CpuShares"` // CPU shares (relative weight vs. other containers)
 	CPUPeriod        int64            `json:"CpuPeriod"` // CPU CFS (Completely Fair Scheduler) period
 	CpusetCpus       string           // CpusetCpus 0-2, 0,1

@@ -31,6 +31,7 @@ docker-run - Run a command in a new container
 [**--help**]
 [**-i**|**--interactive**[=*false*]]
 [**--ipc**[=*IPC*]]
+[**--kernel-memory**[=*KERNEL-MEMORY*]]
 [**-l**|**--label**[=*[]*]]
 [**--label-file**[=*[]*]]
 [**--link**[=*[]*]]
@@ -242,6 +243,15 @@ ENTRYPOINT.
 **-l**, **--label**=[]
    Set metadata on the container (e.g., --label com.example.key=value)
 
+**--kernel-memory**=""
+   Kernel memory limit (format: `<number>[<unit>]`, where unit = b, k, m or g)
+
+   Constrains the kernel memory available to a container. If a limit of 0
+is specified (not using `--kernel-memory`), the container's kernel memory
+is not limited. If you specify a limit, it may be rounded up to a multiple
+of the operating system's page size and the value can be very large,
+millions of trillions.
+
 **--label-file**=[]
    Read in a line delimited file of labels
 
@@ -266,7 +276,7 @@ which interface and port to use.
   Logging driver specific options.
 
 **-m**, **--memory**=""
-   Memory limit (format: <number><optional unit>, where unit = b, k, m or g)
+   Memory limit (format: <number>[<unit>], where unit = b, k, m or g)
 
    Allows you to constrain the memory available to a container. If the host
 supports swap memory, then the **-m** memory setting can be larger than physical
@@ -277,7 +287,7 @@ system's page size (the value would be very large, that's millions of trillions)
 **--memory-swap**=""
    Total memory limit (memory + swap)
 
-   Set `-1` to disable swap (format: <number><optional unit>, where unit = b, k, m or g).
+   Set `-1` to disable swap (format: <number>[<unit>], where unit = b, k, m or g).
 This value should always larger than **-m**, so you should always use this with **-m**.
 
 **--mac-address**=""
@@ -360,7 +370,7 @@ to write files anywhere.  By specifying the `--read-only` flag the container wil
 its root filesystem mounted as read only prohibiting any writes.
 
 **--restart**="no"
-   Restart policy to apply when a container exits (no, on-failure[:max-retry], always)
+   Restart policy to apply when a container exits (no, on-failure[:max-retry], always, unless-stopped).
       
 **--rm**=*true*|*false*
    Automatically remove the container when it exits (incompatible with -d). The default is *false*.

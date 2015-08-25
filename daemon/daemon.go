@@ -103,6 +103,7 @@ type Daemon struct {
 	EventsService    *events.Events
 	netController    libnetwork.NetworkController
 	root             string
+	shutdown         bool
 }
 
 // Get looks for a container using the provided information, which could be
@@ -194,14 +195,6 @@ func (daemon *Daemon) register(container *Container, updateSuffixarray bool) err
 	// we'll waste time if we update it for every container
 	daemon.idIndex.Add(container.ID)
 
-	if err := daemon.verifyVolumesInfo(container); err != nil {
-		return err
-	}
-
-	if err := container.prepareMountPoints(); err != nil {
-		return err
-	}
-
 	if container.IsRunning() {
 		logrus.Debugf("killing old running container %s", container.ID)
 		// Set exit code to 128 + SIGKILL (9) to properly represent unsuccessful exit
@@ -219,6 +212,14 @@ func (daemon *Daemon) register(container *Container, updateSuffixarray bool) err
 		if err := container.ToDisk(); err != nil {
 			logrus.Errorf("Error saving stopped state to disk: %v", err)
 		}
+	}
+
+	if err := daemon.verifyVolumesInfo(container); err != nil {
+		return err
+	}
+
+	if err := container.prepareMountPoints(); err != nil {
+		return err
 	}
 
 	return nil
@@ -745,10 +746,15 @@ func NewDaemon(config *Config, registryService *registry.Service) (daemon *Daemo
 		return nil, err
 	}
 
+	if err := d.cleanupMounts(); err != nil {
+		return nil, err
+	}
+
 	return d, nil
 }
 
 func (daemon *Daemon) Shutdown() error {
+	daemon.shutdown = true
 	if daemon.containers != nil {
 		group := sync.WaitGroup{}
 		logrus.Debug("starting clean shutdown of all containers...")
@@ -787,6 +793,10 @@ func (daemon *Daemon) Shutdown() error {
 		if err := daemon.driver.Cleanup(); err != nil {
 			logrus.Errorf("Error during graph storage driver.Cleanup(): %v", err)
 		}
+	}
+
+	if err := daemon.cleanupMounts(); err != nil {
+		return err
 	}
 
 	return nil

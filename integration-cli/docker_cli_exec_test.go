@@ -186,9 +186,7 @@ func (s *DockerSuite) TestExecTtyCloseStdin(c *check.C) {
 func (s *DockerSuite) TestExecTtyWithoutStdin(c *check.C) {
 	out, _ := dockerCmd(c, "run", "-d", "-ti", "busybox")
 	id := strings.TrimSpace(out)
-	if err := waitRun(id); err != nil {
-		c.Fatal(err)
-	}
+	c.Assert(waitRun(id), check.IsNil)
 
 	errChan := make(chan error)
 	go func() {
@@ -593,5 +591,16 @@ func (s *DockerSuite) TestExecOnReadonlyContainer(c *check.C) {
 	dockerCmd(c, "run", "-d", "--read-only", "--name", "parent", "busybox", "top")
 	if _, status := dockerCmd(c, "exec", "parent", "true"); status != 0 {
 		c.Fatalf("exec into a read-only container failed with exit status %d", status)
+	}
+}
+
+// #15750
+func (s *DockerSuite) TestExecStartFails(c *check.C) {
+	name := "exec-15750"
+	dockerCmd(c, "run", "-d", "--name", name, "busybox", "top")
+
+	_, errmsg, status := dockerCmdWithStdoutStderr(nil, "exec", name, "no-such-cmd")
+	if status == 255 && !strings.Contains(errmsg, "executable file not found") {
+		c.Fatal("exec error message not received. The daemon might had crashed")
 	}
 }

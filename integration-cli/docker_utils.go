@@ -602,7 +602,9 @@ func dockerCmdWithError(args ...string) (string, int, error) {
 
 func dockerCmdWithStdoutStderr(c *check.C, args ...string) (string, string, int) {
 	stdout, stderr, status, err := runCommandWithStdoutStderr(exec.Command(dockerBinary, args...))
-	c.Assert(err, check.IsNil, check.Commentf("%q failed with errors: %s, %v", strings.Join(args, " "), stderr, err))
+	if c != nil {
+		c.Assert(err, check.IsNil, check.Commentf("%q failed with errors: %s, %v", strings.Join(args, " "), stderr, err))
+	}
 	return stdout, stderr, status
 }
 
@@ -1238,9 +1240,11 @@ func runCommandAndReadContainerFile(filename string, cmd *exec.Cmd) ([]byte, err
 		return nil, fmt.Errorf("%v: %q", err, out)
 	}
 
-	time.Sleep(1 * time.Second)
-
 	contID := strings.TrimSpace(out)
+
+	if err := waitRun(contID); err != nil {
+		return nil, fmt.Errorf("%v: %q", contID, err)
+	}
 
 	return readContainerFile(contID, filename)
 }
@@ -1352,4 +1356,34 @@ func createTmpFile(c *check.C, content string) string {
 	c.Assert(err, check.IsNil)
 
 	return filename
+}
+
+func buildImageArgs(args []string, name, dockerfile string, useCache bool) (string, error) {
+	id, _, err := buildImageWithOutArgs(args, name, dockerfile, useCache)
+	return id, err
+}
+
+func buildImageWithOutArgs(args []string, name, dockerfile string, useCache bool) (string, string, error) {
+	buildCmd := buildImageCmdArgs(args, name, dockerfile, useCache)
+	out, exitCode, err := runCommandWithOutput(buildCmd)
+	if err != nil || exitCode != 0 {
+		return "", out, fmt.Errorf("failed to build the image: %s", out)
+	}
+	id, err := getIDByName(name)
+	if err != nil {
+		return "", out, err
+	}
+	return id, out, nil
+}
+
+func buildImageCmdArgs(args []string, name, dockerfile string, useCache bool) *exec.Cmd {
+	args = append(args, []string{"-D", "build", "-t", name}...)
+	if !useCache {
+		args = append(args, "--no-cache")
+	}
+	args = append(args, "-")
+	buildCmd := exec.Command(dockerBinary, args...)
+	buildCmd.Stdin = strings.NewReader(dockerfile)
+	return buildCmd
+
 }

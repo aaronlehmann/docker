@@ -11,15 +11,15 @@ import (
 	"github.com/opencontainers/runc/libcontainer/label"
 )
 
-func (daemon *Daemon) ContainerCreate(name string, config *runconfig.Config, hostConfig *runconfig.HostConfig, adjustCPUShares bool) (string, []string, error) {
+func (daemon *Daemon) ContainerCreate(name string, config *runconfig.Config, hostConfig *runconfig.HostConfig, adjustCPUShares bool) (*Container, []string, error) {
 	if config == nil {
-		return "", nil, fmt.Errorf("Config cannot be empty in order to create a container")
+		return nil, nil, fmt.Errorf("Config cannot be empty in order to create a container")
 	}
 
 	warnings, err := daemon.verifyContainerSettings(hostConfig, config)
 	daemon.adaptContainerSettings(hostConfig, adjustCPUShares)
 	if err != nil {
-		return "", warnings, err
+		return nil, warnings, err
 	}
 
 	container, buildWarnings, err := daemon.Create(config, hostConfig, name)
@@ -29,14 +29,14 @@ func (daemon *Daemon) ContainerCreate(name string, config *runconfig.Config, hos
 			if tag == "" {
 				tag = tags.DefaultTag
 			}
-			return "", warnings, fmt.Errorf("No such image: %s (tag: %s)", config.Image, tag)
+			return nil, warnings, fmt.Errorf("No such image: %s (tag: %s)", config.Image, tag)
 		}
-		return "", warnings, err
+		return nil, warnings, err
 	}
 
 	warnings = append(warnings, buildWarnings...)
 
-	return container.ID, warnings, nil
+	return container, warnings, nil
 }
 
 // Create creates a new container from the given configuration with a given name.
@@ -63,6 +63,7 @@ func (daemon *Daemon) Create(config *runconfig.Config, hostConfig *runconfig.Hos
 	if err := daemon.mergeAndVerifyConfig(config, img); err != nil {
 		return nil, nil, err
 	}
+
 	if hostConfig == nil {
 		hostConfig = &runconfig.HostConfig{}
 	}
@@ -97,7 +98,7 @@ func (daemon *Daemon) Create(config *runconfig.Config, hostConfig *runconfig.Hos
 	}
 	defer container.Unmount()
 
-	if err := createContainerPlatformSpecificSettings(container, config); err != nil {
+	if err := createContainerPlatformSpecificSettings(container, config, img); err != nil {
 		return nil, nil, err
 	}
 
