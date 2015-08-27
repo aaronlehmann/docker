@@ -7,6 +7,7 @@ import (
 	"os"
 	"os/exec"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/go-check/check"
@@ -97,6 +98,133 @@ func (s *DockerRegistrySuite) TestPushMultipleTags(c *check.C) {
 	}
 }
 
+func (s *DockerRegistrySuite) TestConcurrentPushWholeRepo(c *check.C) {
+	repoName := fmt.Sprintf("%v/dockercli/busybox", privateRegistryURL)
+	repoTag1 := fmt.Sprintf("%v/dockercli/busybox:t1", privateRegistryURL)
+	repoTag2 := fmt.Sprintf("%v/dockercli/busybox:t2", privateRegistryURL)
+
+	dockerCmd(c, "tag", "busybox", repoTag1)
+	dockerCmd(c, "tag", "busybox", repoTag2)
+
+	// Push tags concurrently, and wait for both to finish
+	var wg sync.WaitGroup
+
+	for i := 0; i != 3; i++ {
+		wg.Add(1)
+		go func() {
+			dockerCmd(c, "push", repoName)
+			wg.Done()
+		}()
+	}
+
+	wg.Wait()
+
+	// Delete tags to get a fresh copy from the pull
+	dockerCmd(c, "rmi", repoTag1)
+	dockerCmd(c, "rmi", repoTag2)
+
+	// Ensure layer list is equivalent for repoTag1 and repoTag2
+	out1, _ := dockerCmd(c, "pull", repoTag1)
+	if strings.Contains(out1, "Tag t1 not found") {
+		c.Fatalf("Unable to pull pushed image: %s", out1)
+	}
+	imageAlreadyExists := ": Image already exists"
+	var out1Lines []string
+	for _, outputLine := range strings.Split(out1, "\n") {
+		if strings.Contains(outputLine, imageAlreadyExists) {
+			out1Lines = append(out1Lines, outputLine)
+		}
+	}
+
+	out2, _ := dockerCmd(c, "pull", repoTag2)
+	if strings.Contains(out2, "Tag t2 not found") {
+		c.Fatalf("Unable to pull pushed image: %s", out1)
+	}
+	var out2Lines []string
+	for _, outputLine := range strings.Split(out2, "\n") {
+		if strings.Contains(outputLine, imageAlreadyExists) {
+			out1Lines = append(out1Lines, outputLine)
+		}
+	}
+
+	if len(out1Lines) != len(out2Lines) {
+		c.Fatalf("Mismatched output length:\n%s\n%s", out1, out2)
+	}
+
+	for i := range out1Lines {
+		if out1Lines[i] != out2Lines[i] {
+			c.Fatalf("Mismatched output line:\n%s\n%s", out1Lines[i], out2Lines[i])
+		}
+	}
+}
+
+func (s *DockerRegistrySuite) TestConcurrentPushDifferentTags(c *check.C) {
+	repoTag1 := fmt.Sprintf("%v/dockercli/concurrentpush:t1", privateRegistryURL)
+	repoTag2 := fmt.Sprintf("%v/dockercli/concurrentpush:t2", privateRegistryURL)
+
+	_, err := buildImage(repoTag1,
+		`
+    FROM busybox
+    ENTRYPOINT ["/bin/echo"]
+    CMD echo tag1
+`,
+		true)
+
+	if err != nil {
+		c.Fatal(err)
+	}
+
+	_, err = buildImage(repoTag2,
+		`
+    FROM busybox
+    ENTRYPOINT ["/bin/echo"]
+    CMD echo tag2
+`,
+		true)
+
+	if err != nil {
+		c.Fatal(err)
+	}
+
+	// Push tags concurrently, and wait for both to finish
+	var wg sync.WaitGroup
+	wg.Add(2)
+
+	go func() {
+		dockerCmd(c, "push", repoTag1)
+		wg.Done()
+	}()
+	go func() {
+		dockerCmd(c, "push", repoTag2)
+		wg.Done()
+	}()
+
+	wg.Wait()
+
+	// Delete tags to get a fresh copy from the pull
+	dockerCmd(c, "rmi", repoTag1)
+	dockerCmd(c, "rmi", repoTag2)
+
+	// Ensure correct behavior after repulling
+	out, _ := dockerCmd(c, "pull", repoTag1)
+	if strings.Contains(out, "Tag t1 not found") {
+		c.Fatalf("Unable to pull pushed image: %s", out)
+	}
+	out, _ = dockerCmd(c, "run", "--rm", repoTag1)
+	if strings.TrimSpace(out) != "/bin/sh -c echo tag1" {
+		c.Fatalf("CMD did not contain /bin/sh -c echo tag1: %s", out)
+	}
+
+	out, _ = dockerCmd(c, "pull", repoTag2)
+	if strings.Contains(out, "Tag t2 not found") {
+		c.Fatalf("Unable to pull pushed image: %s", out)
+	}
+	out, _ = dockerCmd(c, "run", "--rm", repoTag1)
+	if strings.TrimSpace(out) != "/bin/sh -c echo tag1" {
+		c.Fatalf("CMD did not contain /bin/sh -c echo tag1: %s", out)
+	}
+}
+
 func (s *DockerRegistrySuite) TestPushInterrupt(c *check.C) {
 	repoName := fmt.Sprintf("%v/dockercli/busybox", privateRegistryURL)
 	// tag the image and upload it to the private registry
@@ -113,14 +241,11 @@ func (s *DockerRegistrySuite) TestPushInterrupt(c *check.C) {
 		c.Fatalf("Failed to kill push process: %v", err)
 	}
 	if out, _, err := dockerCmdWithError("push", repoName); err == nil {
-		if !strings.Contains(out, "already in progress") {
-			c.Fatalf("Push should be continued on daemon side, but seems ok: %v, %s", err, out)
+		if !strings.Contains(out, "The push refers to a repository") {
+			c.Fatalf("Push should succeed and repeat output from already-running push: %v, %s", err, out)
 		}
-	}
-	// now wait until all this pushes will complete
-	// if it failed with timeout - there would be some error,
-	// so no logic about it here
-	for exec.Command(dockerBinary, "push", repoName).Run() != nil {
+	} else {
+		c.Fatal("Push failed after interrupt")
 	}
 }
 

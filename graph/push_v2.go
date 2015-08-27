@@ -1,6 +1,7 @@
 package graph
 
 import (
+	"errors"
 	"fmt"
 	"io"
 	"io/ioutil"
@@ -55,14 +56,34 @@ func (p *v2Pusher) getImageTags(askedTag string) ([]string, error) {
 	return tags, nil
 }
 
-func (p *v2Pusher) pushV2Repository(tag string) error {
+func (p *v2Pusher) pushV2Repository(tag string) (err error) {
 	localName := p.repoInfo.LocalName
-	if _, found := p.poolAdd("push", localName); found {
-		return fmt.Errorf("push or pull %s is already in progress", localName)
+	taggedName := localName
+	if len(tag) > 0 {
+		taggedName = utils.ImageReference(localName, tag)
 	}
-	defer p.poolRemove("push", localName, nil)
+	broadcaster, found := p.poolAdd("push", taggedName)
+	if found {
+		// Another push or pull of the same repository is already taking
+		// place; just wait for it to finish
+		broadcaster.Add(p.config.OutStream)
+		result := broadcaster.Wait()
+		if err, ok := result.(error); ok {
+			return err
+		}
+		return nil
+	}
+	defer func() {
+		if err != nil {
+			p.poolRemove("push", taggedName, err)
+		} else {
+			p.poolRemove("push", taggedName, nil)
+		}
+	}()
+	broadcaster.Add(p.config.OutStream)
 
-	tags, err := p.getImageTags(tag)
+	var tags []string
+	tags, err = p.getImageTags(tag)
 	if err != nil {
 		return fmt.Errorf("error getting tags for %s: %s", localName, err)
 	}
@@ -71,7 +92,7 @@ func (p *v2Pusher) pushV2Repository(tag string) error {
 	}
 
 	for _, tag := range tags {
-		if err := p.pushV2Tag(tag); err != nil {
+		if err = p.pushV2Tag(broadcaster, tag); err != nil {
 			return err
 		}
 	}
@@ -79,7 +100,7 @@ func (p *v2Pusher) pushV2Repository(tag string) error {
 	return nil
 }
 
-func (p *v2Pusher) pushV2Tag(tag string) error {
+func (p *v2Pusher) pushV2Tag(out io.Writer, tag string) error {
 	logrus.Debugf("Pushing repository: %s:%s", p.repo.Name(), tag)
 
 	layerID, exists := p.localRepo[tag]
@@ -109,8 +130,6 @@ func (p *v2Pusher) pushV2Tag(tag string) error {
 	if layer != nil && layer.Config != nil {
 		metadata = *layer.Config
 	}
-
-	out := p.config.OutStream
 
 	for ; layer != nil; layer, err = p.graph.GetParent(layer) {
 		if err != nil {
@@ -158,7 +177,7 @@ func (p *v2Pusher) pushV2Tag(tag string) error {
 		// if digest was empty or not saved, or if blob does not exist on the remote repository,
 		// then fetch it.
 		if !exists {
-			if pushDigest, err := p.pushV2Image(p.repo.Blobs(context.Background()), layer); err != nil {
+			if pushDigest, err := p.pushV2Image(out, p.repo.Blobs(context.Background()), layer); err != nil {
 				return err
 			} else if pushDigest != dgst {
 				// Cache new checksum
@@ -196,10 +215,35 @@ func (p *v2Pusher) pushV2Tag(tag string) error {
 	return manSvc.Put(signed)
 }
 
-func (p *v2Pusher) pushV2Image(bs distribution.BlobService, img *image.Image) (digest.Digest, error) {
-	out := p.config.OutStream
+func (p *v2Pusher) pushV2Image(out io.Writer, bs distribution.BlobService, img *image.Image) (dgst digest.Digest, err error) {
+	// We must include the repo name in this key, because cross-repo pushes
+	// may not be deduplicated.
+	poolKey := "layerpush:" + p.repoInfo.LocalName + ":" + img.ID
+	transferBroadcaster, found := p.poolAdd("push", poolKey)
+	transferBroadcaster.Add(out)
+	if found {
+		// This layer is already being uploaded. Wait for the upload to
+		// complete.
+		result := transferBroadcaster.Wait()
+		switch v := result.(type) {
+		case error:
+			return "", v
+		case digest.Digest:
+			return v, nil
+		default:
+			return "", errors.New("unexpected type in returned by broadcaster in pushV2Image")
+		}
+	}
 
-	out.Write(p.sf.FormatProgress(stringid.TruncateID(img.ID), "Preparing", nil))
+	defer func() {
+		if err != nil {
+			p.poolRemove("push", poolKey, err)
+		} else {
+			p.poolRemove("push", poolKey, dgst)
+		}
+	}()
+
+	transferBroadcaster.Write(p.sf.FormatProgress(stringid.TruncateID(img.ID), "Preparing", nil))
 
 	image, err := p.graph.Get(img.ID)
 	if err != nil {
@@ -223,7 +267,7 @@ func (p *v2Pusher) pushV2Image(bs distribution.BlobService, img *image.Image) (d
 
 	reader := progressreader.New(progressreader.Config{
 		In:        ioutil.NopCloser(tee), // we'll take care of close here.
-		Out:       out,
+		Out:       transferBroadcaster,
 		Formatter: p.sf,
 
 		// TODO(stevvooe): This may cause a size reporting error. Try to get
@@ -236,19 +280,19 @@ func (p *v2Pusher) pushV2Image(bs distribution.BlobService, img *image.Image) (d
 		Action:   "Pushing",
 	})
 
-	out.Write(p.sf.FormatProgress(stringid.TruncateID(img.ID), "Pushing", nil))
+	transferBroadcaster.Write(p.sf.FormatProgress(stringid.TruncateID(img.ID), "Pushing", nil))
 	nn, err := io.Copy(layerUpload, reader)
 	if err != nil {
 		return "", err
 	}
 
-	dgst := digester.Digest()
+	dgst = digester.Digest()
 	if _, err := layerUpload.Commit(context.Background(), distribution.Descriptor{Digest: dgst}); err != nil {
 		return "", err
 	}
 
 	logrus.Debugf("uploaded layer %s (%s), %d bytes", img.ID, dgst, nn)
-	out.Write(p.sf.FormatProgress(stringid.TruncateID(img.ID), "Pushed", nil))
+	transferBroadcaster.Write(p.sf.FormatProgress(stringid.TruncateID(img.ID), "Pushed", nil))
 
 	return dgst, nil
 }
