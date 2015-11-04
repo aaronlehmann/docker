@@ -18,6 +18,7 @@ import (
 	"time"
 
 	"github.com/Sirupsen/logrus"
+	"github.com/docker/distribution/digest"
 	"github.com/docker/distribution/reference"
 	"github.com/docker/docker/api"
 	"github.com/docker/docker/api/types"
@@ -1042,6 +1043,9 @@ func (daemon *Daemon) TagImage(newTag reference.Named, imageName string, force b
 	if _, isDigested := newTag.(reference.Digested); isDigested {
 		return errors.New("refusing to create a tag with a digest reference")
 	}
+	if newTag.Name() == string(digest.Canonical) {
+		return errors.New("refusing to create an ambiguous tag using digest algorithm as name")
+	}
 
 	newTag = registry.NormalizeLocalReference(newTag)
 	imageID, err := daemon.GetImageID(imageName)
@@ -1220,6 +1224,11 @@ func (daemon *Daemon) ImageHistory(name string) ([]*types.ImageHistory, error) {
 // GetImageID returns an image ID corresponding to the image referred to by
 // refOrID.
 func (daemon *Daemon) GetImageID(refOrID string) (image.ID, error) {
+	// Treat as an ID
+	if id, err := digest.ParseDigest(refOrID); err == nil {
+		return image.ID(id), nil
+	}
+
 	// Treat it as a possible tag or digest reference
 	if ref, err := reference.ParseNamed(refOrID); err == nil {
 		ref = registry.NormalizeLocalReference(ref)
