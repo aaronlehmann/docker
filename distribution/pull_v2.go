@@ -27,14 +27,13 @@ import (
 )
 
 type v2Puller struct {
-	blobSumLookupService  *metadata.BlobSumLookupService
-	blobSumStorageService *metadata.BlobSumStorageService
-	endpoint              registry.APIEndpoint
-	config                *ImagePullConfig
-	sf                    *streamformatter.StreamFormatter
-	repoInfo              *registry.RepositoryInfo
-	repo                  distribution.Repository
-	sessionID             string
+	blobSumService *metadata.BlobSumService
+	endpoint       registry.APIEndpoint
+	config         *ImagePullConfig
+	sf             *streamformatter.StreamFormatter
+	repoInfo       *registry.RepositoryInfo
+	repo           distribution.Repository
+	sessionID      string
 }
 
 func (p *v2Puller) Pull(ref reference.Named) (fallback bool, err error) {
@@ -223,12 +222,7 @@ func (p *v2Puller) pullV2Tag(out io.Writer, ref reference.Named) (tagUpdated boo
 
 	var downloads []*downloadInfo
 
-	var referencedLayers []layer.Layer
 	defer func() {
-		for _, l := range referencedLayers {
-			p.config.LayerStore.Release(l)
-		}
-
 		for _, d := range downloads {
 			p.config.Pool.removeWithError(d.poolKey, err)
 			if d.tmpFile != nil {
@@ -240,63 +234,80 @@ func (p *v2Puller) pullV2Tag(out io.Writer, ref reference.Named) (tagUpdated boo
 		}
 	}()
 
-	var allBlobSums []digest.Digest
+	var (
+		// Slice of BlobSums, ordered from bottom-most to top-most
+		nonEmptyBlobSums []digest.Digest
+		// Current top layer during the pull process
+		topLayer layer.Layer
+		// Used to accumulate diffIDs to compute a layer ID
+		diffIDs []layer.DiffID
+		// Image history converted to the new format
+		history []image.History
+	)
 
-	// Generate a slice of BlobSums, ordered from bottom-most to top-most
+	poolKey := "v2layer:"
+	notFoundLocally := false
+
+	// Note that the order of this loop is in the direction of bottom-most
+	// to top-most, so that the downloads slice gets ordered correctly.
 	for i := len(verifiedManifest.FSLayers) - 1; i >= 0; i-- {
-		allBlobSums = append(allBlobSums, verifiedManifest.FSLayers[i].BlobSum)
-	}
+		blobSum := verifiedManifest.FSLayers[i].BlobSum
+		poolKey += blobSum.String()
 
-	var parentID layer.ID
+		var throwAway struct {
+			ThrowAway bool `json:"throwaway,omitempty"`
+		}
+		if err := json.Unmarshal([]byte(verifiedManifest.History[i].V1Compatibility), &throwAway); err != nil {
+			return false, err
+		}
 
-	// Iterating from top-most to bottom-most layer
-	var i int
-	for i = len(allBlobSums); i > 0; i-- {
-		// Do we have a layer on disk corresponding to the set of
-		// blobsums up to this point?
-		layerID, err := p.blobSumLookupService.Get(allBlobSums[:i])
+		h, err := v1.HistoryFromConfig([]byte(verifiedManifest.History[i].V1Compatibility), throwAway.ThrowAway)
 		if err != nil {
+			return false, err
+		}
+		history = append(history, h)
+
+		if throwAway.ThrowAway {
 			continue
 		}
 
-		if l, err := p.config.LayerStore.Get(layerID); err == nil {
-			for _, blobSum := range allBlobSums[:i] {
-				logrus.Debugf("Layer already exists: %s", blobSum.String())
-				out.Write(p.sf.FormatProgress(stringid.TruncateID(blobSum.String()), "Already exists", nil))
+		nonEmptyBlobSums = append(nonEmptyBlobSums, blobSum)
+
+		// Do we have a layer on disk corresponding to the set of
+		// blobsums up to this point?
+		if !notFoundLocally {
+			notFoundLocally = true
+			diffID, err := p.blobSumService.GetDiffID(blobSum)
+			if err == nil {
+				diffIDs = append(diffIDs, diffID)
+				if l, err := p.config.LayerStore.Get(layer.CreateID(diffIDs)); err == nil {
+					notFoundLocally = false
+					logrus.Debugf("Layer already exists: %s", blobSum.String())
+					out.Write(p.sf.FormatProgress(stringid.TruncateID(blobSum.String()), "Already exists", nil))
+					defer p.config.LayerStore.Release(l)
+					topLayer = l
+					continue
+				}
 			}
-			referencedLayers = append(referencedLayers, l)
-			parentID = layerID
-			break
 		}
-	}
-
-	poolKey := "v2layer:"
-
-	// Everything that wasn't found on disk needs to be downloaded.
-	// Note that the order of this loop is in the direction of bottom-most
-	// to top-most, so that the downloads slice gets ordered correctly.
-	for ; i < len(allBlobSums); i++ {
-		blobSum := allBlobSums[i]
 
 		out.Write(p.sf.FormatProgress(stringid.TruncateID(blobSum.String()), "Pulling fs layer", nil))
-
-		poolKey += blobSum.String()
-
-		d := &downloadInfo{
-			poolKey:       poolKey,
-			digest:        blobSum,
-			layerBlobSums: allBlobSums[:i+1],
-			// TODO: seems like this chan buffer solved hanging problem in go1.5,
-			// this can indicate some deeper problem that somehow we never take
-			// error from channel in loop below
-			err: make(chan error, 1),
-		}
 
 		tmpFile, err := ioutil.TempFile("", "GetImageBlob")
 		if err != nil {
 			return false, err
 		}
-		d.tmpFile = tmpFile
+
+		d := &downloadInfo{
+			poolKey:       poolKey,
+			digest:        blobSum,
+			layerBlobSums: nonEmptyBlobSums,
+			tmpFile:       tmpFile,
+			// TODO: seems like this chan buffer solved hanging problem in go1.5,
+			// this can indicate some deeper problem that somehow we never take
+			// error from channel in loop below
+			err: make(chan error, 1),
+		}
 
 		downloads = append(downloads, d)
 
@@ -323,15 +334,22 @@ func (p *v2Puller) pullV2Tag(out io.Writer, ref reference.Named) (tagUpdated boo
 				return false, err
 			}
 
-			parentID, err = p.blobSumLookupService.Get(d.layerBlobSums)
+			diffIDs = nil
+			for _, blobSum := range d.layerBlobSums {
+				diffID, err := p.blobSumService.GetDiffID(blobSum)
+				if err != nil {
+					return false, err
+				}
+				diffIDs = append(diffIDs, diffID)
+			}
+
+			l, err := p.config.LayerStore.Get(layer.CreateID(diffIDs))
 			if err != nil {
 				return false, err
 			}
-			l, err := p.config.LayerStore.Get(parentID)
-			if err != nil {
-				return false, err
-			}
-			referencedLayers = append(referencedLayers, l)
+
+			defer p.config.LayerStore.Release(l)
+			topLayer = l
 
 			continue
 		}
@@ -352,47 +370,33 @@ func (p *v2Puller) pullV2Tag(out io.Writer, ref reference.Named) (tagUpdated boo
 			return false, fmt.Errorf("could not get decompression stream: %v", err)
 		}
 
+		var parentID layer.ID
+		if topLayer != nil {
+			parentID = topLayer.ID()
+		}
 		l, err := p.config.LayerStore.Register(inflatedLayerData, parentID)
 		if err != nil {
 			return false, fmt.Errorf("failed to register layer: %v", err)
 		}
 		logrus.Debugf("layer %s registered successfully", l.DiffID())
-		referencedLayers = append(referencedLayers, l)
 
-		// Cache mapping from the set of blobsums so far to this layer ID
-		if err := p.blobSumLookupService.Set(d.layerBlobSums, l.ID()); err != nil {
-			return false, err
-		}
 		// Cache mapping from this layer's DiffID to the blobsum
-		if err := p.blobSumStorageService.Add(l.DiffID(), d.digest); err != nil {
+		if err := p.blobSumService.Add(l.DiffID(), d.digest); err != nil {
 			return false, err
 		}
+
+		defer p.config.LayerStore.Release(l)
+		topLayer = l
 
 		d.broadcaster.Write(p.sf.FormatProgress(stringid.TruncateID(d.digest.String()), "Pull complete", nil))
 		d.broadcaster.Close()
 		tagUpdated = true
-		parentID = l.ID()
 	}
 
-	// Create a new-style config from the legacy config in the manifest
-	var history []image.History
-	for i := len(verifiedManifest.History) - 1; i >= 0; i-- {
-		h, err := v1.HistoryFromConfig([]byte(verifiedManifest.History[i].V1Compatibility))
-		if err != nil {
-			return false, err
-		}
-
-		layerID, err := p.blobSumLookupService.Get(allBlobSums[:len(verifiedManifest.History)-i])
-		if err == nil {
-			if l, err := p.config.LayerStore.Get(layerID); err == nil {
-				h.Size, _ = l.DiffSize()
-				p.config.LayerStore.Release(l)
-			}
-		}
-
-		history = append(history, h)
+	if topLayer == nil {
+		topLayer = layer.EmptyLayer
 	}
-	config, err := v1.ConfigFromV1Config([]byte(verifiedManifest.History[0].V1Compatibility), referencedLayers[len(referencedLayers)-1], history)
+	config, err := v1.ConfigFromV1Config([]byte(verifiedManifest.History[0].V1Compatibility), topLayer, history)
 	if err != nil {
 		return false, err
 	}
