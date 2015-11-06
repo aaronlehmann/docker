@@ -72,6 +72,10 @@ func ConfigFromV1Config(imageJSON []byte, l layer.Layer, history []image.History
 		DockerVersion string `json:"docker_version"`
 	}
 
+	if err := json.Unmarshal(imageJSON, &dver); err != nil {
+		return nil, err
+	}
+
 	useFallback := version.Version(dver.DockerVersion).LessThan(noFallbackMinVersion)
 
 	if useFallback {
@@ -96,6 +100,7 @@ func ConfigFromV1Config(imageJSON []byte, l layer.Layer, history []image.History
 	delete(c, "Size") // Size is calculated from data on disk and is inconsitent
 	delete(c, "parent_id")
 	delete(c, "layer_id")
+	delete(c, "throwaway")
 
 	layerDigests := addLayerDiffIDs(l)
 	c["rootfs"] = rawJSON(&image.RootFS{Type: "layers", DiffIDs: layerDigests})

@@ -179,7 +179,6 @@ func (s *DockerRegistrySuite) TestPullIDStability(c *check.C) {
 
 	originalID, err := getIDByName(derivedImage)
 	if err != nil {
-
 		c.Fatalf("error inspecting: %v", err)
 	}
 	dockerCmd(c, "push", derivedImage)
