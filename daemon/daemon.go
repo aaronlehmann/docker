@@ -726,10 +726,11 @@ func NewDaemon(config *Config, registryService *registry.Service) (daemon *Daemo
 		return nil, err
 	}
 
-	if err := os.MkdirAll(filepath.Join(config.Root, "layers"), 0600); err != nil {
+	imageRoot := filepath.Join(config.Root, "image", d.driver.String())
+	if err := os.MkdirAll(filepath.Join(imageRoot, "layerdb"), 0600); err != nil {
 		return nil, err
 	}
-	fms := layer.NewFileMetadataStore(filepath.Join(config.Root, "layers"))
+	fms := layer.NewFileMetadataStore(filepath.Join(imageRoot, "layerdb"))
 
 	d.layerStore, err = layer.NewStore(fms, d.driver)
 	if err != nil {
@@ -738,7 +739,7 @@ func NewDaemon(config *Config, registryService *registry.Service) (daemon *Daemo
 
 	distributionPool := distribution.NewPool()
 
-	ifs, err := image.NewFSStoreBackend(filepath.Join(config.Root, "images"))
+	ifs, err := image.NewFSStoreBackend(filepath.Join(imageRoot, "imagedb"))
 	if err != nil {
 		return nil, err
 	}
@@ -765,13 +766,13 @@ func NewDaemon(config *Config, registryService *registry.Service) (daemon *Daemo
 		return nil, err
 	}
 
-	distributionMetadataStore := dmetadata.NewFSMetadataStore(filepath.Join(config.Root, "distribution"))
+	distributionMetadataStore := dmetadata.NewFSMetadataStore(filepath.Join(imageRoot, "distribution"))
 
 	eventsService := events.New()
 
-	tagStore, err := tag.NewTagStore(filepath.Join(config.Root, "repositories.v2-"+d.driver.String()))
+	tagStore, err := tag.NewTagStore(filepath.Join(imageRoot, "repositories.json"))
 	if err != nil {
-		return nil, fmt.Errorf("Couldn't create Tag store repositories-%s: %s", d.driver.String(), err)
+		return nil, fmt.Errorf("Couldn't create Tag store repositories: %s", err)
 	}
 
 	// FIXME: Windows
