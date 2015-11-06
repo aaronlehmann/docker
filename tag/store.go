@@ -38,10 +38,15 @@ type Store interface {
 }
 
 type store struct {
-	sync.RWMutex
+	mu sync.RWMutex
+	// jsonPath is the path to the file where the serialized tag data is
+	// stored.
 	jsonPath string
 	// Repositories is a map of repositories, indexed by name.
 	Repositories map[string]repository
+	// referencesByIDCache is a cache of references indexed by ID, to speed
+	// up References.
+	referencesByIDCache map[image.ID]map[string]reference.Named
 }
 
 // Repository maps tags to image IDs. The key is a a stringified Reference,
@@ -70,8 +75,9 @@ func NewTagStore(jsonPath string) (Store, error) {
 	}
 
 	store := &store{
-		jsonPath:     abspath,
-		Repositories: make(map[string]repository),
+		jsonPath:            abspath,
+		Repositories:        make(map[string]repository),
+		referencesByIDCache: make(map[image.ID]map[string]reference.Named),
 	}
 	// Load the json file if it exists, otherwise create it.
 	if err := store.reload(); os.IsNotExist(err) {
@@ -89,8 +95,8 @@ func NewTagStore(jsonPath string) (Store, error) {
 func (store *store) Add(ref reference.Named, id image.ID, force bool) error {
 	ref = defaultTagIfNameOnly(ref)
 
-	store.Lock()
-	defer store.Unlock()
+	store.mu.Lock()
+	defer store.mu.Unlock()
 
 	repository, exists := store.Repositories[ref.Name()]
 	if !exists || repository == nil {
@@ -113,6 +119,10 @@ func (store *store) Add(ref reference.Named, id image.ID, force bool) error {
 	}
 
 	repository[refStr] = id
+	if store.referencesByIDCache[id] == nil {
+		store.referencesByIDCache[id] = make(map[string]reference.Named)
+	}
+	store.referencesByIDCache[id][refStr] = ref
 
 	return store.save()
 }
@@ -122,8 +132,8 @@ func (store *store) Add(ref reference.Named, id image.ID, force bool) error {
 func (store *store) Delete(ref reference.Named) (bool, error) {
 	ref = defaultTagIfNameOnly(ref)
 
-	store.Lock()
-	defer store.Unlock()
+	store.mu.Lock()
+	defer store.mu.Unlock()
 
 	repoName := ref.Name()
 
@@ -133,10 +143,16 @@ func (store *store) Delete(ref reference.Named) (bool, error) {
 	}
 
 	refStr := ref.String()
-	if _, exists := repository[refStr]; exists {
+	if id, exists := repository[refStr]; exists {
 		delete(repository, refStr)
 		if len(repository) == 0 {
 			delete(store.Repositories, repoName)
+		}
+		if store.referencesByIDCache[id] != nil {
+			delete(store.referencesByIDCache[id], refStr)
+			if len(store.referencesByIDCache[id]) == 0 {
+				delete(store.referencesByIDCache, id)
+			}
 		}
 		return true, store.save()
 	}
@@ -148,8 +164,8 @@ func (store *store) Delete(ref reference.Named) (bool, error) {
 func (store *store) Get(ref reference.Named) (image.ID, error) {
 	ref = defaultTagIfNameOnly(ref)
 
-	store.RLock()
-	defer store.RUnlock()
+	store.mu.RLock()
+	defer store.mu.RUnlock()
 
 	repository, exists := store.Repositories[ref.Name()]
 	if !exists || repository == nil {
@@ -167,22 +183,18 @@ func (store *store) Get(ref reference.Named) (image.ID, error) {
 // References returns a slice of references to the given image ID. The slice
 // will be nil if there are no references to this image ID.
 func (store *store) References(id image.ID) []reference.Named {
-	store.RLock()
-	defer store.RUnlock()
+	store.mu.RLock()
+	defer store.mu.RUnlock()
+
+	// Convert the internal map to an array for two reasons:
+	// 1) We must not return a mutable reference.
+	// 2) It would be ugly to expose the extraneous map keys to callers.
 
 	var references []reference.Named
-	for _, repository := range store.Repositories {
-		for refStr, refID := range repository {
-			if refID == id {
-				ref, err := reference.ParseNamed(refStr)
-				if err != nil {
-					// Should never happen
-					return nil
-				}
-				references = append(references, ref)
-			}
-		}
+	for _, ref := range store.referencesByIDCache[id] {
+		references = append(references, ref)
 	}
+
 	return references
 }
 
@@ -190,8 +202,8 @@ func (store *store) References(id image.ID) []reference.Named {
 // If there are no references known for this repository name,
 // ReferencesByName returns nil.
 func (store *store) ReferencesByName(ref reference.Named) []Association {
-	store.RLock()
-	defer store.RUnlock()
+	store.mu.RLock()
+	defer store.mu.RUnlock()
 
 	repository, exists := store.Repositories[ref.Name()]
 	if !exists {
@@ -244,5 +256,20 @@ func (store *store) reload() error {
 	if err := json.NewDecoder(f).Decode(&store); err != nil {
 		return err
 	}
+
+	for _, repository := range store.Repositories {
+		for refStr, refID := range repository {
+			ref, err := reference.ParseNamed(refStr)
+			if err != nil {
+				// Should never happen
+				continue
+			}
+			if store.referencesByIDCache[refID] == nil {
+				store.referencesByIDCache[refID] = make(map[string]reference.Named)
+			}
+			store.referencesByIDCache[refID][refStr] = ref
+		}
+	}
+
 	return nil
 }
