@@ -2,6 +2,7 @@ package image
 
 import (
 	"encoding/json"
+	"errors"
 	"io"
 	"time"
 
@@ -14,7 +15,7 @@ import (
 type ID digest.Digest
 
 func (id ID) String() string {
-	return string(id)
+	return digest.Digest(id).String()
 }
 
 // V1Image stores the V1 image configuration.
@@ -112,20 +113,22 @@ type History struct {
 // Exporter provides interface for exporting and importing images
 type Exporter interface {
 	Load(io.ReadCloser, io.Writer) error
-	// Load(net.Context, io.ReadCloser, <- chan StatusMessage) error
+	// TODO: Load(net.Context, io.ReadCloser, <- chan StatusMessage) error
 	Save([]string, io.Writer) error
 }
 
 // NewFromJSON creates an Image configuration from json.
 func NewFromJSON(src []byte) (*Image, error) {
-	ret := &Image{}
+	img := &Image{}
 
-	// FIXME: Is there a cleaner way to "purify" the input json?
-	if err := json.Unmarshal(src, ret); err != nil {
+	if err := json.Unmarshal(src, img); err != nil {
 		return nil, err
 	}
+	if img.RootFS == nil {
+		return nil, errors.New("Invalid image JSON, no RootFS key.")
+	}
 
-	ret.rawJSON = src
+	img.rawJSON = src
 
-	return ret, nil
+	return img, nil
 }

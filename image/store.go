@@ -24,6 +24,11 @@ type Store interface {
 	Heads() map[ID]*Image
 }
 
+type LayerGetReleaser interface {
+	Get(layer.ID) (layer.Layer, error)
+	Release(layer.Layer) ([]layer.Metadata, error)
+}
+
 type imageMeta struct {
 	layer    layer.Layer
 	children map[ID]struct{}
@@ -31,14 +36,14 @@ type imageMeta struct {
 
 type store struct {
 	sync.Mutex
-	ls        layer.Store
+	ls        LayerGetReleaser
 	images    map[ID]*imageMeta
 	fs        StoreBackend
 	digestSet *digest.Set
 }
 
-// NewImageStore returns new store object for given layer.Store
-func NewImageStore(fs StoreBackend, ls layer.Store) (Store, error) {
+// NewImageStore returns new store object for given layer store
+func NewImageStore(fs StoreBackend, ls LayerGetReleaser) (Store, error) {
 	is := &store{
 		ls:        ls,
 		images:    make(map[ID]*imageMeta),
@@ -206,6 +211,10 @@ func (is *store) Delete(id ID) ([]layer.Metadata, error) {
 	if imageMeta == nil {
 		return nil, fmt.Errorf("unrecognized image ID %s", id.String())
 	}
+	for id := range imageMeta.children {
+		is.fs.DeleteMetadata(digest.Digest(id), "parent")
+	}
+
 	delete(is.images, id)
 	is.fs.Delete(digest.Digest(id))
 
@@ -217,12 +226,12 @@ func (is *store) Delete(id ID) ([]layer.Metadata, error) {
 
 func (is *store) SetParent(id, parent ID) error {
 	is.Lock()
+	defer is.Unlock()
 	parentMeta := is.images[parent]
 	if parentMeta == nil {
 		return fmt.Errorf("unknown parent image ID %s", parent.String())
 	}
 	parentMeta.children[id] = struct{}{}
-	is.Unlock()
 	return is.fs.SetMetadata(digest.Digest(id), "parent", []byte(parent))
 }
 
