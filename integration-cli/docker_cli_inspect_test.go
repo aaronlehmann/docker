@@ -23,7 +23,7 @@ func checkValidGraphDriver(c *check.C, name string) {
 func (s *DockerSuite) TestInspectImage(c *check.C) {
 	testRequires(c, DaemonIsLinux)
 	imageTest := "emptyfs"
-	imageTestID := "511136ea3c5a64f264b78b5433614aec563103b4d4702f3ba7d4d2698e22c158"
+	imageTestID := "sha256:11f64303f0f7ffdc71f001788132bca5346831939a956e3e975c93267d89a16d"
 	id, err := inspectField(imageTest, "Id")
 	c.Assert(err, checker.IsNil)
 
