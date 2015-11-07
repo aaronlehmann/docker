@@ -22,6 +22,7 @@ type StoreBackend interface {
 	Delete(id digest.Digest) error
 	SetMetadata(id digest.Digest, key string, data []byte) error
 	GetMetadata(id digest.Digest, key string) ([]byte, error)
+	DeleteMetadata(id digest.Digest, key string) error
 }
 
 type fs struct {
@@ -171,4 +172,11 @@ func (s *fs) GetMetadata(id digest.Digest, key string) ([]byte, error) {
 		return nil, err
 	}
 	return ioutil.ReadFile(filepath.Join(s.metadataDir(id), key))
+}
+
+func (s *fs) DeleteMetadata(id digest.Digest, key string) error {
+	s.Lock()
+	defer s.Unlock()
+
+	return os.RemoveAll(filepath.Join(s.metadataDir(id), key))
 }
