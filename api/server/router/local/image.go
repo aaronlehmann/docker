@@ -22,7 +22,6 @@ import (
 	"github.com/docker/docker/pkg/archive"
 	"github.com/docker/docker/pkg/chrootarchive"
 	"github.com/docker/docker/pkg/ioutils"
-	"github.com/docker/docker/pkg/parsers"
 	"github.com/docker/docker/pkg/progressreader"
 	"github.com/docker/docker/pkg/streamformatter"
 	"github.com/docker/docker/pkg/ulimit"
@@ -140,8 +139,25 @@ func (s *router) postImagesCreate(ctx context.Context, w http.ResponseWriter, r 
 			}
 		}
 	} else { //import
-		if tag == "" {
-			repo, tag = parsers.ParseRepositoryTag(repo)
+		var newRef reference.Named
+		if repo != "" {
+			var err error
+			newRef, err = reference.ParseNamed(repo)
+			if err != nil {
+				return err
+			}
+
+			switch newRef.(type) {
+			case reference.Digested:
+				return errors.New("cannot import digest reference")
+			}
+
+			if tag != "" {
+				newRef, err = reference.WithTag(newRef, tag)
+				if err != nil {
+					return err
+				}
+			}
 		}
 
 		src := r.Form.Get("fromSrc")
@@ -155,7 +171,7 @@ func (s *router) postImagesCreate(ctx context.Context, w http.ResponseWriter, r 
 			return err
 		}
 
-		err = s.daemon.ImportImage(src, repo, tag, message, r.Body, output, newConfig)
+		err = s.daemon.ImportImage(src, newRef, message, r.Body, output, newConfig)
 	}
 	if err != nil {
 		if !output.Flushed() {
@@ -463,8 +479,7 @@ func sanitizeRepoAndTags(names []string) ([]reference.Named, error) {
 		uniqNames = make(map[string]struct{})
 	)
 	for _, repo := range names {
-		name, _ := parsers.ParseRepositoryTag(repo)
-		if name == "" {
+		if repo == "" {
 			continue
 		}
 

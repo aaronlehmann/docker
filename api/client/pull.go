@@ -7,7 +7,6 @@ import (
 	"github.com/docker/distribution/reference"
 	Cli "github.com/docker/docker/cli"
 	flag "github.com/docker/docker/pkg/mflag"
-	"github.com/docker/docker/pkg/parsers"
 	"github.com/docker/docker/registry"
 	tagpkg "github.com/docker/docker/tag"
 )
@@ -24,9 +23,25 @@ func (cli *DockerCli) CmdPull(args ...string) error {
 	cmd.ParseFlags(args, true)
 	remote := cmd.Arg(0)
 
-	taglessRemote, tag := parsers.ParseRepositoryTag(remote)
+	distributionRef, err := reference.ParseNamed(remote)
+	if err != nil {
+		return err
+	}
+
+	var tag string
+	switch x := distributionRef.(type) {
+	case reference.Digested:
+		tag = x.Digest().String()
+	case reference.Tagged:
+		tag = x.Tag()
+	}
+
 	if tag == "" && !*allTags {
 		tag = tagpkg.DefaultTag
+		distributionRef, err = reference.WithTag(distributionRef, tag)
+		if err != nil {
+			return err
+		}
 		fmt.Fprintf(cli.out, "Using default tag: %s\n", tag)
 	} else if tag != "" && *allTags {
 		return fmt.Errorf("tag can't be used with --all-tags/-a")
@@ -34,10 +49,6 @@ func (cli *DockerCli) CmdPull(args ...string) error {
 
 	ref := registry.ParseReference(tag)
 
-	distributionRef, err := reference.ParseNamed(remote)
-	if err != nil {
-		return err
-	}
 	// Resolve the Repository name from fqn to RepositoryInfo
 	repoInfo, err := registry.ParseRepositoryInfo(distributionRef)
 	if err != nil {
@@ -51,7 +62,7 @@ func (cli *DockerCli) CmdPull(args ...string) error {
 	}
 
 	v := url.Values{}
-	v.Set("fromImage", ref.ImageName(taglessRemote))
+	v.Set("fromImage", distributionRef.String())
 
 	_, _, err = cli.clientRequestAttemptLogin("POST", "/images/create?"+v.Encode(), nil, cli.out, repoInfo.Index, "pull")
 	return err

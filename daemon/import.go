@@ -16,14 +16,13 @@ import (
 	"github.com/docker/docker/pkg/progressreader"
 	"github.com/docker/docker/pkg/streamformatter"
 	"github.com/docker/docker/runconfig"
-	"github.com/docker/docker/utils"
 )
 
 // ImportImage imports an image, getting the archived layer data either from
 // inConfig (if src is "-"), or from a URI specified in src. Progress output is
 // written to outStream. Repository and tag names can optionally be given in
 // the repo and tag arguments, respectively.
-func (daemon *Daemon) ImportImage(src, repo, tag, msg string, inConfig io.ReadCloser, outStream io.Writer, config *runconfig.Config) error {
+func (daemon *Daemon) ImportImage(src string, newRef reference.Named, msg string, inConfig io.ReadCloser, outStream io.Writer, config *runconfig.Config) error {
 	var (
 		sf      = streamformatter.NewJSONStreamFormatter()
 		archive io.ReadCloser
@@ -100,28 +99,13 @@ func (daemon *Daemon) ImportImage(src, repo, tag, msg string, inConfig io.ReadCl
 	}
 
 	// FIXME: connect with commit code and call tagstore directly
-	if repo != "" {
-		newRef, err := reference.WithName(repo) // todo: should move this to API layer
-		if err != nil {
-			return err
-		}
-		if tag != "" {
-			if newRef, err = reference.WithTag(newRef, tag); err != nil {
-				return err
-			}
-		}
+	if newRef != nil {
 		if err := daemon.TagImage(newRef, id.String(), true); err != nil {
 			return err
 		}
 	}
 
-	outStream.Write(sf.FormatStatus("", string(id)))
-	logID := string(id)
-	if tag != "" {
-		logID = utils.ImageReference(logID, tag)
-	}
-
-	daemon.EventsService.Log("import", logID, "")
+	outStream.Write(sf.FormatStatus("", id.String()))
+	daemon.EventsService.Log("import", id.String(), "")
 	return nil
-
 }

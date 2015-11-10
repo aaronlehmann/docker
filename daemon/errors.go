@@ -3,8 +3,8 @@ package daemon
 import (
 	"strings"
 
+	"github.com/docker/distribution/reference"
 	derr "github.com/docker/docker/errors"
-	"github.com/docker/docker/pkg/parsers"
 	tagpkg "github.com/docker/docker/tag"
 )
 
@@ -13,11 +13,15 @@ func (d *Daemon) imageNotExistToErrcode(err error) error {
 		if strings.Contains(dne.RefOrID, "@") {
 			return derr.ErrorCodeNoSuchImageHash.WithArgs(dne.RefOrID)
 		}
-		img, tag := parsers.ParseRepositoryTag(dne.RefOrID)
-		if tag == "" {
-			tag = tagpkg.DefaultTag
+		tag := tagpkg.DefaultTag
+		ref, err := reference.ParseNamed(dne.RefOrID)
+		if err != nil {
+			return derr.ErrorCodeNoSuchImageTag.WithArgs(dne.RefOrID, tag)
 		}
-		return derr.ErrorCodeNoSuchImageTag.WithArgs(img, tag)
+		if tagged, isTagged := ref.(reference.Tagged); isTagged {
+			tag = tagged.Tag()
+		}
+		return derr.ErrorCodeNoSuchImageTag.WithArgs(ref.Name(), tag)
 	}
 	return err
 }

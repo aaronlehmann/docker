@@ -12,7 +12,6 @@ import (
 	"github.com/docker/distribution/manifest/schema1"
 	"github.com/docker/docker/api/types"
 	"github.com/docker/docker/pkg/stringutils"
-	"github.com/docker/docker/utils"
 	"github.com/go-check/check"
 )
 
@@ -33,7 +32,7 @@ func setupImageWithTag(c *check.C, tag string) (digest.Digest, error) {
 	dockerCmd(c, "run", "-d", "-e", "digest=1", "--name", containerName, "busybox")
 
 	// tag the image to upload it to the private registry
-	repoAndTag := utils.ImageReference(repoName, tag)
+	repoAndTag := repoName + ":" + tag
 	if out, _, err := dockerCmdWithError("commit", containerName, repoAndTag); err != nil {
 		return "", fmt.Errorf("image tagging failed: %s, %v", out, err)
 	}

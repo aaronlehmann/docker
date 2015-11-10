@@ -12,7 +12,6 @@ import (
 	"github.com/docker/distribution/reference"
 	"github.com/docker/docker/api/types"
 	Cli "github.com/docker/docker/cli"
-	"github.com/docker/docker/pkg/parsers"
 	"github.com/docker/docker/registry"
 	"github.com/docker/docker/runconfig"
 	tagpkg "github.com/docker/docker/tag"
@@ -24,18 +23,25 @@ func (cli *DockerCli) pullImage(image string) error {
 
 func (cli *DockerCli) pullImageCustomOut(image string, out io.Writer) error {
 	v := url.Values{}
-	repos, tag := parsers.ParseRepositoryTag(image)
-	// pull only the image tagged 'latest' if no tag was specified
-	if tag == "" {
-		tag = tagpkg.DefaultTag
-	}
-	v.Set("fromImage", repos)
-	v.Set("tag", tag)
 
-	ref, err := reference.ParseNamed(repos)
+	ref, err := reference.ParseNamed(image)
 	if err != nil {
 		return err
 	}
+
+	var tag string
+	switch x := ref.(type) {
+	case reference.Digested:
+		tag = x.Digest().String()
+	case reference.Tagged:
+		tag = x.Tag()
+	default:
+		// pull only the image tagged 'latest' if no tag was specified
+		tag = tagpkg.DefaultTag
+	}
+
+	v.Set("fromImage", ref.Name())
+	v.Set("tag", tag)
 
 	// Resolve the Repository name from fqn to RepositoryInfo
 	repoInfo, err := registry.ParseRepositoryInfo(ref)
