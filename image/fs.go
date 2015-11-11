@@ -11,12 +11,12 @@ import (
 	"github.com/docker/distribution/digest"
 )
 
-// IDWalKFunc is function called by StoreBackgend.Walk
-type IDWalKFunc func(id digest.Digest) error
+// IDWalkFunc is function called by StoreBackend.Walk
+type IDWalkFunc func(id digest.Digest) error
 
 // StoreBackend provides interface for image.Store persistence
 type StoreBackend interface {
-	Walk(f IDWalKFunc) error
+	Walk(f IDWalkFunc) error
 	Get(id digest.Digest) ([]byte, error)
 	Set(data []byte) (digest.Digest, error)
 	Delete(id digest.Digest) error
@@ -61,7 +61,7 @@ func (s *fs) metadataDir(dgst digest.Digest) string {
 	return filepath.Join(s.root, metadataDirName, string(dgst.Algorithm()), dgst.Hex())
 }
 
-func (s *fs) Walk(f IDWalKFunc) error {
+func (s *fs) Walk(f IDWalkFunc) error {
 	// Only Canonical digest (sha256) is currently supported
 	dir, err := ioutil.ReadDir(filepath.Join(s.root, contentDirName, string(digest.Canonical)))
 	if err != nil {
