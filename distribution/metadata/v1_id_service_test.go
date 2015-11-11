@@ -15,7 +15,10 @@ func TestV1IDService(t *testing.T) {
 	}
 	defer os.RemoveAll(tmpDir)
 
-	metadataStore := NewFSMetadataStore(tmpDir)
+	metadataStore, err := NewFSMetadataStore(tmpDir)
+	if err != nil {
+		t.Fatalf("could not create metadata store: %v", err)
+	}
 	v1IDService := NewV1IDService(metadataStore)
 
 	testVectors := []struct {

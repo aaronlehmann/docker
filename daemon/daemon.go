@@ -772,7 +772,10 @@ func NewDaemon(config *Config, registryService *registry.Service) (daemon *Daemo
 		return nil, err
 	}
 
-	distributionMetadataStore := dmetadata.NewFSMetadataStore(filepath.Join(imageRoot, "distribution"))
+	distributionMetadataStore, err := dmetadata.NewFSMetadataStore(filepath.Join(imageRoot, "distribution"))
+	if err != nil {
+		return nil, err
+	}
 
 	eventsService := events.New()
 

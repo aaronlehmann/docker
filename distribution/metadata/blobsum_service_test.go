@@ -17,7 +17,10 @@ func TestBlobSumService(t *testing.T) {
 	}
 	defer os.RemoveAll(tmpDir)
 
-	metadataStore := NewFSMetadataStore(tmpDir)
+	metadataStore, err := NewFSMetadataStore(tmpDir)
+	if err != nil {
+		t.Fatalf("could not create metadata store: %v", err)
+	}
 	blobSumService := NewBlobSumService(metadataStore)
 
 	testVectors := []struct {

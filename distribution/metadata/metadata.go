@@ -25,10 +25,13 @@ type FSMetadataStore struct {
 }
 
 // NewFSMetadataStore creates a new filesystem-based metadata store.
-func NewFSMetadataStore(basePath string) *FSMetadataStore {
+func NewFSMetadataStore(basePath string) (*FSMetadataStore, error) {
+	if err := os.MkdirAll(basePath, 0700); err != nil {
+		return nil, err
+	}
 	return &FSMetadataStore{
 		basePath: basePath,
-	}
+	}, nil
 }
 
 func (store *FSMetadataStore) path(namespace, key string) string {
