@@ -208,7 +208,7 @@ func (d Docker) GetCachedImage(imgID string, cfg *runconfig.Config) (string, err
 	if cache == nil || err != nil {
 		return "", err
 	}
-	return cache.ID.String(), nil
+	return cache.ID().String(), nil
 }
 
 // Kill stops the container execution abruptly.

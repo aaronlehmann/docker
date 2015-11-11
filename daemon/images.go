@@ -151,7 +151,7 @@ func (daemon *Daemon) Images(filterArgs, filter string, all bool) ([]*types.Imag
 func newImage(image *image.Image, size int64) *types.Image {
 	newImage := new(types.Image)
 	newImage.ParentID = image.Parent.String()
-	newImage.ID = image.ID.String()
+	newImage.ID = image.ID().String()
 	newImage.Created = image.Created.Unix()
 	newImage.Size = size
 	if image.Config != nil {

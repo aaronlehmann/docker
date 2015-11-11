@@ -1111,7 +1111,7 @@ func (daemon *Daemon) LookupImage(name string) (*types.ImageInspect, error) {
 		return nil, fmt.Errorf("No such image: %s", name)
 	}
 
-	refs := daemon.tagStore.References(img.ID)
+	refs := daemon.tagStore.References(img.ID())
 	repoTags := make([]string, 0)
 	repoDigests := make([]string, 0)
 	for _, ref := range refs {
@@ -1141,7 +1141,7 @@ func (daemon *Daemon) LookupImage(name string) (*types.ImageInspect, error) {
 	}
 
 	imageInspect := &types.ImageInspect{
-		ID:              img.ID.String(),
+		ID:              img.ID().String(),
 		RepoTags:        repoTags,
 		RepoDigests:     repoDigests,
 		Parent:          img.Parent.String(),
@@ -1220,7 +1220,7 @@ func (daemon *Daemon) ImageHistory(name string) ([]*types.ImageHistory, error) {
 
 	// Fill in image IDs and tags
 	histImg := img
-	id := img.ID
+	id := img.ID()
 	for i := 0; i != len(history); i++ {
 		history[i].ID = id.String()
 

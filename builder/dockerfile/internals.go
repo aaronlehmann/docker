@@ -412,7 +412,7 @@ func containsWildcards(name string) bool {
 }
 
 func (b *Builder) processImageFrom(img *image.Image) error {
-	b.image = img.ID.String()
+	b.image = img.ID().String()
 
 	if img.Config != nil {
 		b.runConfig = img.Config

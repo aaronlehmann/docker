@@ -54,7 +54,7 @@ func (daemon *Daemon) create(params *ContainerCreateConfig) (retC *Container, re
 		if err != nil {
 			return nil, err
 		}
-		imgID = img.ID
+		imgID = img.ID()
 	}
 
 	if err := daemon.mergeAndVerifyConfig(params.Config, img); err != nil {
