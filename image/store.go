@@ -103,9 +103,6 @@ func (is *store) restore() error {
 }
 
 func (is *store) Create(config []byte) (ID, error) {
-	// strongID
-	// store into file
-	// remove all if something failed
 	var img Image
 	err := json.Unmarshal(config, &img)
 	if err != nil {
