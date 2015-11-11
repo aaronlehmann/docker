@@ -49,13 +49,16 @@ type V1Image struct {
 // Image stores the image configuration
 type Image struct {
 	V1Image
-	ID      ID        `json:"id,omitempty"`
 	Parent  ID        `json:"parent,omitempty"`
 	RootFS  *RootFS   `json:"rootfs,omitempty"`
 	History []History `json:"history,omitempty"`
 
 	// rawJSON caches the immutable JSON associated with this image.
 	rawJSON []byte
+
+	// computedID is the ID computed from the hash of the image config.
+	// Not to be confused with the legacy V1 ID in V1Image.
+	computedID ID
 }
 
 // RootFS describes images root filesystem
@@ -69,6 +72,11 @@ type RootFS struct {
 // RawJSON returns the immutable JSON associated with the image.
 func (img *Image) RawJSON() []byte {
 	return img.rawJSON
+}
+
+// ID returns the image's content-addressable ID.
+func (img *Image) ID() ID {
+	return img.computedID
 }
 
 // GetTopLayerID returns the top layer ID for this image.

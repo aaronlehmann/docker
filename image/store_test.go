@@ -52,11 +52,11 @@ func TestRestore(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	if actual, expected := img1.ID, ID(id1); actual != expected {
+	if actual, expected := img1.computedID, ID(id1); actual != expected {
 		t.Fatalf("invalid image ID: expected %q, got %q", expected, actual)
 	}
 
-	if actual, expected := img1.ID.String(), string(id1); actual != expected {
+	if actual, expected := img1.computedID.String(), string(id1); actual != expected {
 		t.Fatalf("invalid image ID string: expected %q, got %q", expected, actual)
 	}
 

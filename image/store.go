@@ -189,7 +189,7 @@ func (is *store) Get(id ID) (*Image, error) {
 	if err != nil {
 		return nil, err
 	}
-	img.ID = id
+	img.computedID = id
 
 	img.Parent, err = is.GetParent(id)
 	if err != nil {
