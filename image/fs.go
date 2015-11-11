@@ -12,17 +12,17 @@ import (
 )
 
 // IDWalkFunc is function called by StoreBackend.Walk
-type IDWalkFunc func(id digest.Digest) error
+type IDWalkFunc func(id ID) error
 
 // StoreBackend provides interface for image.Store persistence
 type StoreBackend interface {
 	Walk(f IDWalkFunc) error
-	Get(id digest.Digest) ([]byte, error)
-	Set(data []byte) (digest.Digest, error)
-	Delete(id digest.Digest) error
-	SetMetadata(id digest.Digest, key string, data []byte) error
-	GetMetadata(id digest.Digest, key string) ([]byte, error)
-	DeleteMetadata(id digest.Digest, key string) error
+	Get(id ID) ([]byte, error)
+	Set(data []byte) (ID, error)
+	Delete(id ID) error
+	SetMetadata(id ID, key string, data []byte) error
+	GetMetadata(id ID, key string) ([]byte, error)
+	DeleteMetadata(id ID, key string) error
 }
 
 type fs struct {
@@ -53,11 +53,13 @@ func newFSStore(root string) (*fs, error) {
 	return s, nil
 }
 
-func (s *fs) contentFile(dgst digest.Digest) string {
+func (s *fs) contentFile(id ID) string {
+	dgst := digest.Digest(id)
 	return filepath.Join(s.root, contentDirName, string(dgst.Algorithm()), dgst.Hex())
 }
 
-func (s *fs) metadataDir(dgst digest.Digest) string {
+func (s *fs) metadataDir(id ID) string {
+	dgst := digest.Digest(id)
 	return filepath.Join(s.root, metadataDirName, string(dgst.Algorithm()), dgst.Hex())
 }
 
@@ -73,7 +75,7 @@ func (s *fs) Walk(f IDWalkFunc) error {
 			logrus.Debugf("Skipping invalid digest %s: %s", dgst, err)
 			continue
 		}
-		if err := f(dgst); err != nil {
+		if err := f(ID(dgst)); err != nil {
 			return err
 		}
 	}
@@ -81,14 +83,14 @@ func (s *fs) Walk(f IDWalkFunc) error {
 }
 
 // todo: GetContent?
-func (s *fs) Get(id digest.Digest) ([]byte, error) {
+func (s *fs) Get(id ID) ([]byte, error) {
 	s.Lock()
 	defer s.Unlock()
 
 	return s.get(id)
 }
 
-func (s *fs) get(id digest.Digest) ([]byte, error) {
+func (s *fs) get(id ID) ([]byte, error) {
 	content, err := ioutil.ReadFile(s.contentFile(id))
 	if err != nil {
 		return nil, err
@@ -99,14 +101,14 @@ func (s *fs) get(id digest.Digest) ([]byte, error) {
 	if err != nil {
 		return nil, err
 	}
-	if validated != id {
+	if ID(validated) != id {
 		return nil, fmt.Errorf("failed to verify image: %v", id)
 	}
 
 	return content, nil
 }
 
-func (s *fs) Set(data []byte) (digest.Digest, error) {
+func (s *fs) Set(data []byte) (ID, error) {
 	s.Lock()
 	defer s.Unlock()
 
@@ -118,8 +120,9 @@ func (s *fs) Set(data []byte) (digest.Digest, error) {
 	if err != nil {
 		return "", err
 	}
-	filePath := s.contentFile(dgst)
-	tempFilePath := s.contentFile(dgst) + ".tmp"
+	id := ID(dgst)
+	filePath := s.contentFile(id)
+	tempFilePath := s.contentFile(id) + ".tmp"
 	if err := ioutil.WriteFile(tempFilePath, data, 0600); err != nil {
 		return "", err
 	}
@@ -127,11 +130,11 @@ func (s *fs) Set(data []byte) (digest.Digest, error) {
 		return "", err
 	}
 
-	return dgst, nil
+	return id, nil
 }
 
 // remove base file and helpers
-func (s *fs) Delete(id digest.Digest) error {
+func (s *fs) Delete(id ID) error {
 	s.Lock()
 	defer s.Unlock()
 
@@ -145,7 +148,7 @@ func (s *fs) Delete(id digest.Digest) error {
 }
 
 // fails if no base file
-func (s *fs) SetMetadata(id digest.Digest, key string, data []byte) error {
+func (s *fs) SetMetadata(id ID, key string, data []byte) error {
 	s.Lock()
 	defer s.Unlock()
 	if _, err := s.get(id); err != nil {
@@ -164,7 +167,7 @@ func (s *fs) SetMetadata(id digest.Digest, key string, data []byte) error {
 	return os.Rename(tempFilePath, filePath)
 }
 
-func (s *fs) GetMetadata(id digest.Digest, key string) ([]byte, error) {
+func (s *fs) GetMetadata(id ID, key string) ([]byte, error) {
 	s.Lock()
 	defer s.Unlock()
 
@@ -174,7 +177,7 @@ func (s *fs) GetMetadata(id digest.Digest, key string) ([]byte, error) {
 	return ioutil.ReadFile(filepath.Join(s.metadataDir(id), key))
 }
 
-func (s *fs) DeleteMetadata(id digest.Digest, key string) error {
+func (s *fs) DeleteMetadata(id ID, key string) error {
 	s.Lock()
 	defer s.Unlock()
 
