@@ -15,12 +15,11 @@ import (
 	"github.com/docker/distribution/manifest/schema1"
 	"github.com/docker/distribution/reference"
 	"github.com/docker/docker/distribution/metadata"
+	"github.com/docker/docker/distribution/xfer"
 	"github.com/docker/docker/image"
 	"github.com/docker/docker/image/v1"
 	"github.com/docker/docker/layer"
-	"github.com/docker/docker/pkg/archive"
-	"github.com/docker/docker/pkg/broadcaster"
-	"github.com/docker/docker/pkg/progressreader"
+	"github.com/docker/docker/pkg/jsonmessage"
 	"github.com/docker/docker/pkg/streamformatter"
 	"github.com/docker/docker/pkg/stringid"
 	"github.com/docker/docker/registry"
@@ -34,7 +33,6 @@ type v2Puller struct {
 	sf             *streamformatter.StreamFormatter
 	repoInfo       *registry.RepositoryInfo
 	repo           distribution.Repository
-	sessionID      string
 }
 
 func (p *v2Puller) Pull(ref reference.Named) (fallback bool, err error) {
@@ -44,8 +42,6 @@ func (p *v2Puller) Pull(ref reference.Named) (fallback bool, err error) {
 		logrus.Debugf("Error getting v2 registry: %v", err)
 		return true, err
 	}
-
-	p.sessionID = stringid.GenerateRandomID()
 
 	if err := p.pullV2Repository(ref); err != nil {
 		if registry.ContinueOnError(err) {
@@ -110,76 +106,103 @@ func (p *v2Puller) pullV2Repository(ref reference.Named) (err error) {
 	return nil
 }
 
-// downloadInfo is used to pass information from download to extractor
-type downloadInfo struct {
-	tmpFile     *os.File
-	digest      digest.Digest
-	layer       distribution.ReadSeekCloser
-	size        int64
-	err         chan error
-	poolKey     string
-	broadcaster *broadcaster.Buffered
+type tmpFileWrapper struct {
+	tmpFile      *os.File
+	didFirstRead bool
 }
 
-type errVerification struct{}
+func (w *tmpFileWrapper) Read(p []byte) (int, error) {
+	if !w.didFirstRead {
+		w.tmpFile.Seek(0, 0)
+		w.didFirstRead = true
+	}
+	return w.tmpFile.Read(p)
+}
 
-func (errVerification) Error() string { return "verification failed" }
+func (w *tmpFileWrapper) Close() error {
+	w.tmpFile.Close()
+	if err := os.RemoveAll(w.tmpFile.Name()); err != nil {
+		logrus.Errorf("Failed to remove temp file: %s", w.tmpFile.Name())
+	}
 
-func (p *v2Puller) download(di *downloadInfo) {
-	logrus.Debugf("pulling blob %q", di.digest)
+	return nil
+}
 
-	blobs := p.repo.Blobs(context.Background())
+type layerDescriptor struct {
+	chainID        layer.ChainID
+	digest         digest.Digest
+	layerStore     layer.Store
+	repo           distribution.Repository
+	blobSumService *metadata.BlobSumService
+}
 
-	desc, err := blobs.Stat(context.Background(), di.digest)
+func (ld *layerDescriptor) Key() string {
+	return ld.digest.String()
+}
+
+func (ld *layerDescriptor) Layer() (layer.Layer, error) {
+	if ld.chainID == "" {
+		return nil, errors.New("layer not available")
+	}
+	return ld.layerStore.Get(ld.chainID)
+}
+
+func (ld *layerDescriptor) Download(ctx context.Context, progressChan chan<- xfer.Progress) (io.ReadCloser, int64, error) {
+	logrus.Debugf("pulling blob %q", ld.digest)
+
+	blobs := ld.repo.Blobs(ctx)
+
+	desc, err := blobs.Stat(ctx, ld.digest)
 	if err != nil {
 		logrus.Debugf("Error statting layer: %v", err)
-		di.err <- err
-		return
+		return nil, 0, err
 	}
-	di.size = desc.Size
 
-	layerDownload, err := blobs.Open(context.Background(), di.digest)
+	layerDownload, err := blobs.Open(ctx, ld.digest)
 	if err != nil {
 		logrus.Debugf("Error fetching layer: %v", err)
-		di.err <- err
-		return
+		return nil, 0, err
 	}
 	defer layerDownload.Close()
 
-	verifier, err := digest.NewDigestVerifier(di.digest)
+	verifier, err := digest.NewDigestVerifier(ld.digest)
 	if err != nil {
-		di.err <- err
-		return
+		return nil, 0, err
 	}
 
-	digestStr := di.digest.String()
+	tmpFileWrapper := &tmpFileWrapper{}
 
-	reader := progressreader.New(progressreader.Config{
-		In:        ioutil.NopCloser(io.TeeReader(layerDownload, verifier)),
-		Out:       di.broadcaster,
-		Formatter: p.sf,
-		Size:      di.size,
-		NewLines:  false,
-		ID:        stringid.TruncateID(digestStr),
-		Action:    "Downloading",
-	})
-	io.Copy(di.tmpFile, reader)
+	tmpFileWrapper.tmpFile, err = ioutil.TempFile("", "GetImageBlob")
+	if err != nil {
+		return nil, 0, err
+	}
 
-	di.broadcaster.Write(p.sf.FormatProgress(stringid.TruncateID(digestStr), "Verifying Checksum", nil))
+	reader := xfer.NewProgressReader(ioutil.NopCloser(io.TeeReader(layerDownload, verifier)), progressChan, desc.Size, stringid.TruncateID(ld.Key()), "Downloading")
+	io.Copy(tmpFileWrapper.tmpFile, reader)
+
+	progressChan <- xfer.Progress{ID: stringid.TruncateID(ld.Key()), Message: "Verifying Checksum"}
 
 	if !verifier.Verified() {
-		err = fmt.Errorf("filesystem layer verification failed for digest %s", di.digest)
+		err = fmt.Errorf("filesystem layer verification failed for digest %s", ld.digest)
 		logrus.Error(err)
-		di.err <- err
-		return
+		tmpFileWrapper.tmpFile.Close()
+		if err := os.RemoveAll(tmpFileWrapper.tmpFile.Name()); err != nil {
+			logrus.Errorf("Failed to remove temp file: %s", tmpFileWrapper.tmpFile.Name())
+		}
+
+		return nil, 0, err
 	}
 
-	di.broadcaster.Write(p.sf.FormatProgress(stringid.TruncateID(digestStr), "Download complete", nil))
+	progressChan <- xfer.Progress{ID: stringid.TruncateID(ld.Key()), Message: "Download complete"}
 
-	logrus.Debugf("Downloaded %s to tempfile %s", digestStr, di.tmpFile.Name())
-	di.layer = layerDownload
+	logrus.Debugf("Downloaded %s to tempfile %s", ld.Key(), tmpFileWrapper.tmpFile.Name())
 
-	di.err <- nil
+	return tmpFileWrapper, desc.Size, nil
+}
+
+func (ld *layerDescriptor) Registered(diffID layer.DiffID) {
+	// Cache mapping from this layer's DiffID to the blobsum
+	ld.blobSumService.Add(diffID, ld.digest)
 }
 
 func (p *v2Puller) pullV2Tag(out io.Writer, ref reference.Named) (tagUpdated bool, err error) {
@@ -226,31 +249,17 @@ func (p *v2Puller) pullV2Tag(out io.Writer, ref reference.Named) (tagUpdated boo
 
 	out.Write(p.sf.FormatStatus(tagOrDigest, "Pulling from %s", p.repo.Name()))
 
-	var downloads []*downloadInfo
-
-	defer func() {
-		for _, d := range downloads {
-			p.config.Pool.removeWithError(d.poolKey, err)
-			if d.tmpFile != nil {
-				d.tmpFile.Close()
-				if err := os.RemoveAll(d.tmpFile.Name()); err != nil {
-					logrus.Errorf("Failed to remove temp file: %s", d.tmpFile.Name())
-				}
-			}
-		}
-	}()
+	var descriptors []xfer.Descriptor
 
 	// Image history converted to the new format
 	var history []image.History
 
-	poolKey := "v2layer:"
 	notFoundLocally := false
 
 	// Note that the order of this loop is in the direction of bottom-most
 	// to top-most, so that the downloads slice gets ordered correctly.
 	for i := len(verifiedManifest.FSLayers) - 1; i >= 0; i-- {
 		blobSum := verifiedManifest.FSLayers[i].BlobSum
-		poolKey += blobSum.String()
 
 		var throwAway struct {
 			ThrowAway bool `json:"throwaway,omitempty"`
@@ -269,116 +278,55 @@ func (p *v2Puller) pullV2Tag(out io.Writer, ref reference.Named) (tagUpdated boo
 			continue
 		}
 
-		// Do we have a layer on disk corresponding to the set of
-		// blobsums up to this point?
+		layerDescriptor := &layerDescriptor{
+			digest:         blobSum,
+			layerStore:     p.config.LayerStore,
+			repo:           p.repo,
+			blobSumService: p.blobSumService,
+		}
+
+		// Do we have a possible layer on disk corresponding to the set
+		// of blobsums up to this point?
 		if !notFoundLocally {
-			notFoundLocally = true
 			diffID, err := p.blobSumService.GetDiffID(blobSum)
-			if err == nil {
+			if err != nil {
+				notFoundLocally = true
+			} else {
 				rootFS.Append(diffID)
-				if l, err := p.config.LayerStore.Get(rootFS.ChainID()); err == nil {
-					notFoundLocally = false
-					logrus.Debugf("Layer already exists: %s", blobSum.String())
-					out.Write(p.sf.FormatProgress(stringid.TruncateID(blobSum.String()), "Already exists", nil))
-					defer layer.ReleaseAndLog(p.config.LayerStore, l)
-					continue
-				} else {
-					rootFS.DiffIDs = rootFS.DiffIDs[:len(rootFS.DiffIDs)-1]
-				}
+				layerDescriptor.chainID = layer.CreateChainID(rootFS.DiffIDs)
 			}
 		}
 
-		out.Write(p.sf.FormatProgress(stringid.TruncateID(blobSum.String()), "Pulling fs layer", nil))
+		descriptors = append(descriptors, layerDescriptor)
+	}
 
-		tmpFile, err := ioutil.TempFile("", "GetImageBlob")
-		if err != nil {
-			return false, err
+	download, progress := p.config.DownloadManager.Download(context.Background(), descriptors)
+	defer download.Release()
+
+	for {
+		prog, ok := <-progress
+		if !ok {
+			break
 		}
-
-		d := &downloadInfo{
-			poolKey: poolKey,
-			digest:  blobSum,
-			tmpFile: tmpFile,
-			// TODO: seems like this chan buffer solved hanging problem in go1.5,
-			// this can indicate some deeper problem that somehow we never take
-			// error from channel in loop below
-			err: make(chan error, 1),
-		}
-
-		downloads = append(downloads, d)
-
-		broadcaster, found := p.config.Pool.add(d.poolKey)
-		broadcaster.Add(out)
-		d.broadcaster = broadcaster
-		if found {
-			d.err <- nil
+		if prog.Message != "" {
+			out.Write(p.sf.FormatProgress(prog.ID, prog.Message, nil))
 		} else {
-			go p.download(d)
+			jsonProgress := jsonmessage.JSONProgress{Current: prog.Current, Total: prog.Total}
+			fmtMessage := p.sf.FormatProgress(prog.ID, prog.Action, &jsonProgress)
+			out.Write(fmtMessage)
 		}
 	}
 
-	for _, d := range downloads {
-		if err := <-d.err; err != nil {
-			return false, err
-		}
+	l, err := download.Result()
+	if err != nil {
+		return false, err
+	}
 
-		if d.layer == nil {
-			// Wait for a different pull to download and extract
-			// this layer.
-			err = d.broadcaster.Wait()
-			if err != nil {
-				return false, err
-			}
+	rootFS.DiffIDs = []layer.DiffID{}
 
-			diffID, err := p.blobSumService.GetDiffID(d.digest)
-			if err != nil {
-				return false, err
-			}
-			rootFS.Append(diffID)
-
-			l, err := p.config.LayerStore.Get(rootFS.ChainID())
-			if err != nil {
-				return false, err
-			}
-
-			defer layer.ReleaseAndLog(p.config.LayerStore, l)
-
-			continue
-		}
-
-		d.tmpFile.Seek(0, 0)
-		reader := progressreader.New(progressreader.Config{
-			In:        d.tmpFile,
-			Out:       d.broadcaster,
-			Formatter: p.sf,
-			Size:      d.size,
-			NewLines:  false,
-			ID:        stringid.TruncateID(d.digest.String()),
-			Action:    "Extracting",
-		})
-
-		inflatedLayerData, err := archive.DecompressStream(reader)
-		if err != nil {
-			return false, fmt.Errorf("could not get decompression stream: %v", err)
-		}
-
-		l, err := p.config.LayerStore.Register(inflatedLayerData, rootFS.ChainID())
-		if err != nil {
-			return false, fmt.Errorf("failed to register layer: %v", err)
-		}
-		logrus.Debugf("layer %s registered successfully", l.DiffID())
-		rootFS.Append(l.DiffID())
-
-		// Cache mapping from this layer's DiffID to the blobsum
-		if err := p.blobSumService.Add(l.DiffID(), d.digest); err != nil {
-			return false, err
-		}
-
-		defer layer.ReleaseAndLog(p.config.LayerStore, l)
-
-		d.broadcaster.Write(p.sf.FormatProgress(stringid.TruncateID(d.digest.String()), "Pull complete", nil))
-		d.broadcaster.Close()
-		tagUpdated = true
+	for l != nil {
+		rootFS.DiffIDs = append([]layer.DiffID{l.DiffID()}, rootFS.DiffIDs...)
+		l = l.Parent()
 	}
 
 	config, err := v1.MakeConfigFromV1Config([]byte(verifiedManifest.History[0].V1Compatibility), rootFS, history)
@@ -396,26 +344,19 @@ func (p *v2Puller) pullV2Tag(out io.Writer, ref reference.Named) (tagUpdated boo
 		return false, err
 	}
 
-	// Check for new tag if no layers downloaded
-	var oldTagImageID image.ID
-	if !tagUpdated {
-		oldTagImageID, err = p.config.TagStore.Get(ref)
-		if err != nil || oldTagImageID != imageID {
-			tagUpdated = true
-		}
-	}
-
-	if tagUpdated {
-		if err = p.config.TagStore.Add(ref, imageID, true); err != nil {
-			return false, err
-		}
-	}
-
 	if manifestDigest != "" {
 		out.Write(p.sf.FormatStatus("", "Digest: %s", manifestDigest))
 	}
 
-	return tagUpdated, nil
+	oldTagImageID, err := p.config.TagStore.Get(ref)
+	if err == nil && oldTagImageID == imageID {
+		return false, nil
+	}
+
+	if err = p.config.TagStore.Add(ref, imageID, true); err != nil {
+		return false, err
+	}
+	return true, nil
 }
 
 func verifyManifest(signedManifest *schema1.SignedManifest, ref reference.Reference) (m *schema1.Manifest, err error) {
