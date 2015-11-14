@@ -10,6 +10,7 @@ import (
 	"github.com/docker/docker/cliconfig"
 	"github.com/docker/docker/daemon/events"
 	"github.com/docker/docker/distribution/metadata"
+	"github.com/docker/docker/distribution/xfer"
 	"github.com/docker/docker/image"
 	"github.com/docker/docker/layer"
 	"github.com/docker/docker/pkg/streamformatter"
@@ -42,8 +43,10 @@ type ImagePullConfig struct {
 	ImageStore image.Store
 	// TagStore manages tags.
 	TagStore tag.Store
-	// Pool manages concurrent pulls.
+	// Pool manages concurrent pulls. (FIXME: remove)
 	Pool *Pool
+	// DownloadManager manages concurrent pulls.
+	DownloadManager *xfer.LayerDownloadManager
 }
 
 // Puller is an interface that abstracts pulling for different API versions.

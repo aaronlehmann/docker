@@ -33,6 +33,7 @@ import (
 	"github.com/docker/docker/daemon/network"
 	"github.com/docker/docker/distribution"
 	dmetadata "github.com/docker/docker/distribution/metadata"
+	"github.com/docker/docker/distribution/xfer"
 	derr "github.com/docker/docker/errors"
 	"github.com/docker/docker/image"
 	"github.com/docker/docker/image/tarexport"
@@ -126,7 +127,8 @@ type Daemon struct {
 	containers                *contStore
 	execCommands              *exec.Store
 	tagStore                  tag.Store
-	distributionPool          *distribution.Pool
+	distributionPool          *distribution.Pool // FIXME: remove
+	downloadManager           *xfer.LayerDownloadManager
 	distributionMetadataStore dmetadata.Store
 	trustKey                  libtrust.PrivateKey
 	idIndex                   *truncindex.TruncIndex
@@ -733,6 +735,7 @@ func NewDaemon(config *Config, registryService *registry.Service) (daemon *Daemo
 	}
 
 	distributionPool := distribution.NewPool()
+	d.downloadManager = xfer.NewLayerDownloadManager(d.layerStore)
 
 	ifs, err := image.NewFSStoreBackend(filepath.Join(imageRoot, "imagedb"))
 	if err != nil {
@@ -1050,6 +1053,7 @@ func (daemon *Daemon) PullImage(ref reference.Named, metaHeaders map[string][]st
 		ImageStore:      daemon.imageStore,
 		TagStore:        daemon.tagStore,
 		Pool:            daemon.distributionPool,
+		DownloadManager: daemon.downloadManager,
 	}
 
 	return distribution.Pull(ref, imagePullConfig)
