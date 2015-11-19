@@ -5,8 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
-	"net"
-	"net/url"
+	"io/ioutil"
 	"strings"
 	"sync"
 	"time"
@@ -15,14 +14,15 @@ import (
 	"github.com/docker/distribution/reference"
 	"github.com/docker/distribution/registry/client/transport"
 	"github.com/docker/docker/distribution/metadata"
+	"github.com/docker/docker/distribution/xfer"
 	"github.com/docker/docker/image"
 	"github.com/docker/docker/image/v1"
 	"github.com/docker/docker/layer"
-	"github.com/docker/docker/pkg/archive"
-	"github.com/docker/docker/pkg/progressreader"
+	"github.com/docker/docker/pkg/jsonmessage"
 	"github.com/docker/docker/pkg/streamformatter"
 	"github.com/docker/docker/pkg/stringid"
 	"github.com/docker/docker/registry"
+	"golang.org/x/net/context"
 )
 
 type v1Puller struct {
@@ -163,7 +163,7 @@ selectLoop:
 	return nil
 }
 
-func (p *v1Puller) downloadImage(out io.Writer, repoData *registry.RepositoryData, img *registry.ImgData, layerDownloaded chan struct{}, errors chan error) {
+func (p *v1Puller) downloadImage(out io.Writer, repoData *registry.RepositoryData, img *registry.ImgData, layerDownloaded chan<- struct{}, errors chan error) {
 	if img.Tag == "" {
 		logrus.Debugf("Image (id: %s) present in this repository but untagged, skipping", img.ID)
 		return
@@ -184,17 +184,13 @@ func (p *v1Puller) downloadImage(out io.Writer, repoData *registry.RepositoryDat
 	out.Write(p.sf.FormatProgress(stringid.TruncateID(img.ID), fmt.Sprintf("Pulling image (%s) from %s", img.Tag, p.repoInfo.CanonicalName.Name()), nil))
 	success := false
 	var lastErr error
-	var isDownloaded bool
 	for _, ep := range p.repoInfo.Index.Mirrors {
 		ep += "v1/"
 		out.Write(p.sf.FormatProgress(stringid.TruncateID(img.ID), fmt.Sprintf("Pulling image (%s) from %s, mirror: %s", img.Tag, p.repoInfo.CanonicalName.Name(), ep), nil))
-		if isDownloaded, err = p.pullImage(out, img.ID, ep, localNameRef); err != nil {
+		if err = p.pullImage(out, img.ID, ep, localNameRef, layerDownloaded); err != nil {
 			// Don't report errors when pulling from mirrors.
 			logrus.Debugf("Error pulling image (%s) from %s, mirror: %s, %s", img.Tag, p.repoInfo.CanonicalName.Name(), ep, err)
 			continue
-		}
-		if isDownloaded {
-			layerDownloaded <- struct{}{}
 		}
 		success = true
 		break
@@ -202,15 +198,12 @@ func (p *v1Puller) downloadImage(out io.Writer, repoData *registry.RepositoryDat
 	if !success {
 		for _, ep := range repoData.Endpoints {
 			out.Write(p.sf.FormatProgress(stringid.TruncateID(img.ID), fmt.Sprintf("Pulling image (%s) from %s, endpoint: %s", img.Tag, p.repoInfo.CanonicalName.Name(), ep), nil))
-			if isDownloaded, err = p.pullImage(out, img.ID, ep, localNameRef); err != nil {
+			if err = p.pullImage(out, img.ID, ep, localNameRef, layerDownloaded); err != nil {
 				// It's not ideal that only the last error is returned, it would be better to concatenate the errors.
 				// As the error is also given to the output stream the user will see the error.
 				lastErr = err
 				out.Write(p.sf.FormatProgress(stringid.TruncateID(img.ID), fmt.Sprintf("Error pulling image (%s) from %s, endpoint: %s, %s", img.Tag, p.repoInfo.CanonicalName.Name(), ep, err), nil))
 				continue
-			}
-			if isDownloaded {
-				layerDownloaded <- struct{}{}
 			}
 			success = true
 			break
@@ -225,118 +218,93 @@ func (p *v1Puller) downloadImage(out io.Writer, repoData *registry.RepositoryDat
 	out.Write(p.sf.FormatProgress(stringid.TruncateID(img.ID), "Download complete", nil))
 }
 
-func (p *v1Puller) pullImage(out io.Writer, v1ID, endpoint string, localNameRef reference.Named) (layersDownloaded bool, err error) {
+func (p *v1Puller) pullImage(out io.Writer, v1ID, endpoint string, localNameRef reference.Named, layerDownloaded chan<- struct{}) (err error) {
 	var history []string
 	history, err = p.session.GetRemoteHistory(v1ID, endpoint)
 	if err != nil {
-		return false, err
+		return err
 	}
 	if len(history) < 1 {
-		return false, fmt.Errorf("empty history for image %s", v1ID)
+		return fmt.Errorf("empty history for image %s", v1ID)
 	}
 	out.Write(p.sf.FormatProgress(stringid.TruncateID(v1ID), "Pulling dependent layers", nil))
-	// FIXME: Try to stream the images?
-	// FIXME: Launch the getRemoteImage() in goroutines
 
 	var (
-		referencedLayers []layer.Layer
-		parentID         layer.ChainID
-		newHistory       []image.History
-		img              *image.V1Image
-		imgJSON          []byte
-		imgSize          int64
+		descriptors []xfer.Descriptor
+		newHistory  []image.History
+		img         *image.V1Image
+		imgJSON     []byte
+		imgSize     int64
 	)
 
-	defer func() {
-		for _, l := range referencedLayers {
-			layer.ReleaseAndLog(p.config.LayerStore, l)
-		}
-	}()
-
-	layersDownloaded = false
-
-	// Iterate over layers from top-most to bottom-most, checking if any
-	// already exist on disk.
-	var i int
-	for i = 0; i != len(history); i++ {
-		v1LayerID := history[i]
-		// Do we have a mapping for this particular v1 ID on this
-		// registry?
-		if layerID, err := p.v1IDService.Get(v1LayerID, p.repoInfo.Index.Name); err == nil {
-			// Does the layer actually exist
-			if l, err := p.config.LayerStore.Get(layerID); err == nil {
-				for j := i; j >= 0; j-- {
-					logrus.Debugf("Layer already exists: %s", history[j])
-					out.Write(p.sf.FormatProgress(stringid.TruncateID(history[j]), "Already exists", nil))
-				}
-				referencedLayers = append(referencedLayers, l)
-				parentID = layerID
-				break
-			}
-		}
-	}
-
-	needsDownload := i
-
 	// Iterate over layers, in order from bottom-most to top-most. Download
-	// config for all layers, and download actual layer data if needed.
-	for i = len(history) - 1; i >= 0; i-- {
+	// config for all layers and create descriptors.
+	for i := len(history) - 1; i >= 0; i-- {
 		v1LayerID := history[i]
 		imgJSON, imgSize, err = p.downloadLayerConfig(out, v1LayerID, endpoint)
 		if err != nil {
-			return layersDownloaded, err
+			return err
 		}
 
 		img = &image.V1Image{}
 		if err := json.Unmarshal(imgJSON, img); err != nil {
-			return layersDownloaded, err
-		}
-
-		if i < needsDownload {
-			l, err := p.downloadLayer(out, v1LayerID, endpoint, parentID, imgSize, &layersDownloaded)
-
-			// Note: This needs to be done even in the error case to avoid
-			// stale references to the layer.
-			if l != nil {
-				referencedLayers = append(referencedLayers, l)
-			}
-			if err != nil {
-				return layersDownloaded, err
-			}
-
-			parentID = l.ChainID()
+			return err
 		}
 
 		// Create a new-style config from the legacy configs
 		h, err := v1.HistoryFromConfig(imgJSON, false)
 		if err != nil {
-			return layersDownloaded, err
+			return err
 		}
 		newHistory = append(newHistory, h)
+
+		layerDescriptor := &v1LayerDescriptor{
+			v1LayerID:       v1LayerID,
+			indexName:       p.repoInfo.Index.Name,
+			endpoint:        endpoint,
+			v1IDService:     p.v1IDService,
+			layerDownloaded: layerDownloaded,
+			layerSize:       imgSize,
+			session:         p.session,
+		}
+
+		descriptors = append(descriptors, layerDescriptor)
 	}
 
 	rootFS := image.NewRootFS()
-	l := referencedLayers[len(referencedLayers)-1]
-	for l != nil {
-		rootFS.DiffIDs = append([]layer.DiffID{l.DiffID()}, rootFS.DiffIDs...)
-		l = l.Parent()
+	download, progress := p.config.DownloadManager.Download(context.Background(), *rootFS, descriptors)
+	defer download.Release()
+
+	for prog := range progress {
+		if prog.Message != "" {
+			out.Write(p.sf.FormatProgress(prog.ID, prog.Message, nil))
+		} else {
+			jsonProgress := jsonmessage.JSONProgress{Current: prog.Current, Total: prog.Total}
+			fmtMessage := p.sf.FormatProgress(prog.ID, prog.Action, &jsonProgress)
+			out.Write(fmtMessage)
+		}
 	}
 
-	config, err := v1.MakeConfigFromV1Config(imgJSON, rootFS, newHistory)
+	resultRootFS, err := download.Result()
 	if err != nil {
-		return layersDownloaded, err
+		return err
+	}
+
+	config, err := v1.MakeConfigFromV1Config(imgJSON, &resultRootFS, newHistory)
+	if err != nil {
+		return err
 	}
 
 	imageID, err := p.config.ImageStore.Create(config)
 	if err != nil {
-		return layersDownloaded, err
+		return err
 	}
 
 	if err := p.config.TagStore.AddTag(localNameRef, imageID, true); err != nil {
-		return layersDownloaded, err
+		return err
 	}
 
-	return layersDownloaded, nil
+	return nil
 }
 
 func (p *v1Puller) downloadLayerConfig(out io.Writer, v1LayerID, endpoint string) (imgJSON []byte, imgSize int64, err error) {
@@ -360,95 +328,57 @@ func (p *v1Puller) downloadLayerConfig(out io.Writer, v1LayerID, endpoint string
 	return nil, 0, nil
 }
 
-func (p *v1Puller) downloadLayer(out io.Writer, v1LayerID, endpoint string, parentID layer.ChainID, layerSize int64, layersDownloaded *bool) (l layer.Layer, err error) {
-	// ensure no two downloads of the same layer happen at the same time
-	poolKey := "layer:" + v1LayerID
-	broadcaster, found := p.config.Pool.add(poolKey)
-	broadcaster.Add(out)
-	if found {
-		logrus.Debugf("Image (id: %s) pull is already running, skipping", v1LayerID)
-		if err = broadcaster.Wait(); err != nil {
-			return nil, err
-		}
-		layerID, err := p.v1IDService.Get(v1LayerID, p.repoInfo.Index.Name)
-		if err != nil {
-			return nil, err
-		}
-		// Does the layer actually exist
-		l, err := p.config.LayerStore.Get(layerID)
-		if err != nil {
-			return nil, err
-		}
-		return l, nil
+type v1LayerDescriptor struct {
+	v1LayerID       string
+	indexName       string
+	endpoint        string
+	v1IDService     *metadata.V1IDService
+	layerDownloaded chan<- struct{}
+	layerSize       int64
+	session         *registry.Session
+}
+
+func (ld *v1LayerDescriptor) Key() string {
+	return "v1:" + ld.v1LayerID
+}
+
+func (ld *v1LayerDescriptor) ID() string {
+	return stringid.TruncateID(ld.v1LayerID)
+}
+
+func (ld *v1LayerDescriptor) DiffID() (layer.DiffID, error) {
+	return ld.v1IDService.Get(ld.v1LayerID, ld.indexName)
+}
+
+func (ld *v1LayerDescriptor) Download(ctx context.Context, progressChan chan<- xfer.Progress) (io.ReadCloser, int64, error) {
+	progressChan <- xfer.Progress{ID: ld.ID(), Message: "Pulling fs layer"}
+	layerReader, err := ld.session.GetRemoteImageLayer(ld.v1LayerID, ld.endpoint, ld.layerSize)
+	if err != nil {
+		progressChan <- xfer.Progress{ID: ld.ID(), Message: "Error pulling dependent layers"}
+		return nil, 0, err
+	}
+	ld.layerDownloaded <- struct{}{}
+
+	defer layerReader.Close()
+
+	tmpFileWrapper := &tmpFileWrapper{}
+
+	tmpFileWrapper.tmpFile, err = ioutil.TempFile("", "GetImageBlob")
+	if err != nil {
+		return nil, 0, err
 	}
 
-	// This must use a closure so it captures the value of err when
-	// the function returns, not when the 'defer' is evaluated.
-	defer func() {
-		p.config.Pool.removeWithError(poolKey, err)
-	}()
+	reader := xfer.NewProgressReader(layerReader, progressChan, ld.layerSize, ld.ID(), "Downloading")
+	io.Copy(tmpFileWrapper.tmpFile, reader)
 
-	retries := 5
-	for j := 1; j <= retries; j++ {
-		// Get the layer
-		status := "Pulling fs layer"
-		if j > 1 {
-			status = fmt.Sprintf("Pulling fs layer [retries: %d]", j)
-		}
-		broadcaster.Write(p.sf.FormatProgress(stringid.TruncateID(v1LayerID), status, nil))
-		layerReader, err := p.session.GetRemoteImageLayer(v1LayerID, endpoint, layerSize)
-		if uerr, ok := err.(*url.Error); ok {
-			err = uerr.Err
-		}
-		if terr, ok := err.(net.Error); ok && terr.Timeout() && j < retries {
-			time.Sleep(time.Duration(j) * 500 * time.Millisecond)
-			continue
-		} else if err != nil {
-			broadcaster.Write(p.sf.FormatProgress(stringid.TruncateID(v1LayerID), "Error pulling dependent layers", nil))
-			return nil, err
-		}
-		*layersDownloaded = true
-		defer layerReader.Close()
+	progressChan <- xfer.Progress{ID: ld.ID(), Message: "Download complete"}
 
-		reader := progressreader.New(progressreader.Config{
-			In:        layerReader,
-			Out:       broadcaster,
-			Formatter: p.sf,
-			Size:      layerSize,
-			NewLines:  false,
-			ID:        stringid.TruncateID(v1LayerID),
-			Action:    "Downloading",
-		})
+	logrus.Debugf("Downloaded %s to tempfile %s", ld.ID(), tmpFileWrapper.tmpFile.Name())
 
-		inflatedLayerData, err := archive.DecompressStream(reader)
-		if err != nil {
-			return nil, fmt.Errorf("could not get decompression stream: %v", err)
-		}
+	return tmpFileWrapper, ld.layerSize, nil
+}
 
-		l, err := p.config.LayerStore.Register(inflatedLayerData, parentID)
-		if err != nil {
-			return nil, fmt.Errorf("failed to register layer: %v", err)
-		}
-		logrus.Debugf("layer %s registered successfully", l.DiffID())
-
-		if terr, ok := err.(net.Error); ok && terr.Timeout() && j < retries {
-			time.Sleep(time.Duration(j) * 500 * time.Millisecond)
-			continue
-		} else if err != nil {
-			broadcaster.Write(p.sf.FormatProgress(stringid.TruncateID(v1LayerID), "Error downloading dependent layers", nil))
-			return nil, err
-		}
-
-		// Cache mapping from this v1 ID to content-addressable layer ID
-		if err := p.v1IDService.Set(v1LayerID, p.repoInfo.Index.Name, l.ChainID()); err != nil {
-			return nil, err
-		}
-
-		broadcaster.Write(p.sf.FormatProgress(stringid.TruncateID(v1LayerID), "Download complete", nil))
-		broadcaster.Close()
-		return l, nil
-	}
-
-	// not reached
-	return nil, nil
+func (ld *v1LayerDescriptor) Registered(diffID layer.DiffID) {
+	// Cache mapping from this layer's DiffID to the blobsum
+	ld.v1IDService.Set(ld.v1LayerID, ld.indexName, diffID)
 }

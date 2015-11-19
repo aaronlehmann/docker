@@ -9,7 +9,6 @@ import (
 	"github.com/docker/docker/image"
 	"github.com/docker/docker/layer"
 	"github.com/docker/docker/pkg/archive"
-	"github.com/docker/docker/pkg/stringid"
 	"golang.org/x/net/context"
 )
 
@@ -82,11 +81,15 @@ func (d *returnedDownload) Result() (image.RootFS, error) {
 
 // A Descriptor references a layer that may need to be downloaded.
 type Descriptor interface {
+	// Key returns the key used to deduplicate downloads.
 	Key() string
+	// ID returns the ID for display purposes.
+	ID() string
 	// DiffID should return the DiffID for this layer, or an error
 	// if it is unknown (for example, if it has not been downloaded
 	// before).
 	DiffID() (layer.DiffID, error)
+	// Download is called to perform the download.
 	Download(ctx context.Context, progressChan chan<- Progress) (io.ReadCloser, int64, error)
 }
 
@@ -142,7 +145,7 @@ func (ldm *LayerDownloadManager) Download(ctx context.Context, initialRootFS ima
 					l, err := ldm.layerStore.Get(initialRootFS.ChainID())
 					if err == nil {
 						// Layer already exists.
-						logrus.Debugf("Layer already exists: %s", descriptor.Key())
+						logrus.Debugf("Layer already exists: %s", descriptor.ID())
 						progressChan <- progressMessage(descriptor, "Already exists")
 						if topLayer != nil {
 							layer.ReleaseAndLog(ldm.layerStore, topLayer)
@@ -259,7 +262,7 @@ func (ldm *LayerDownloadManager) makeXferFunc(descriptor Descriptor, parentLayer
 				parentLayer = l.ChainID()
 			}
 
-			reader := NewProgressReader(downloadReader, progressChan, size, stringid.TruncateID(descriptor.Key()), "Extracting")
+			reader := NewProgressReader(downloadReader, progressChan, size, descriptor.ID(), "Extracting")
 
 			inflatedLayerData, err := archive.DecompressStream(reader)
 			if err != nil {
@@ -310,5 +313,5 @@ func (ldm *LayerDownloadManager) makeXferFunc(descriptor Descriptor, parentLayer
 }
 
 func progressMessage(descriptor Descriptor, message string) Progress {
-	return Progress{ID: stringid.TruncateID(descriptor.Key()), Message: message}
+	return Progress{ID: descriptor.ID(), Message: message}
 }
