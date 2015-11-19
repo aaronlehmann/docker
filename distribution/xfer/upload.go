@@ -2,20 +2,21 @@ package xfer
 
 import (
 	"github.com/docker/distribution"
-	"github.com/docker/distribution/digest"
 	"github.com/docker/docker/layer"
 	"golang.org/x/net/context"
 )
 
-type Upload interface {
-	Transfer
-
-	Result() (digest.Digest, error)
-}
-
+// LayerUploadManager provides task management and progress reporting for
+// uploads.
 type LayerUploadManager struct {
 	layerStore layer.Store
 	tm         transferManager
+}
+
+// Upload is an interface returned to the caller of UploadLayer. It can be used
+// to find out whether the upload was successful.
+type Upload interface {
+	Result() error
 }
 
 // UploadLayer uses the transfer manager to either start a new upload, or
