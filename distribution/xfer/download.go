@@ -13,11 +13,15 @@ import (
 	"golang.org/x/net/context"
 )
 
+// LayerDownloadManager figures out which layers need to be downloaded, then
+// registers and downloads those, taking into account dependencies between
+// layers.
 type LayerDownloadManager struct {
 	layerStore layer.Store
 	tm         TransferManager
 }
 
+// NewLayerDownloadManager returns a new LayerDownloadManager.
 func NewLayerDownloadManager(layerStore layer.Store) *LayerDownloadManager {
 	return &LayerDownloadManager{
 		layerStore: layerStore,
@@ -43,7 +47,10 @@ func (d *downloadTransfer) result() (layer.Layer, error) {
 // the result of the nonblocking operation, and to release the resources
 // associated with it.
 type Download interface {
+	// Result returns the top layer for the image, if all layers were
+	// obtained successfully.
 	Result() (image.RootFS, error)
+	// Release frees the resources associated with the download.
 	Release()
 }
 
@@ -81,6 +88,15 @@ type Descriptor interface {
 	// before).
 	DiffID() (layer.DiffID, error)
 	Download(ctx context.Context, progressChan chan<- Progress) (io.ReadCloser, int64, error)
+}
+
+// DescriptorWithRegistered is a Descriptor that has an additional Registered
+// method which gets called after a downloaded layer is registered. This allows
+// the user of the download manager to know the DiffID of each registered
+// layer. This method is called if a cast to DescriptorWithRegistered is
+// successful.
+type DescriptorWithRegistered interface {
+	Descriptor
 	Registered(diffID layer.DiffID)
 }
 
@@ -265,7 +281,10 @@ func (ldm *LayerDownloadManager) makeXferFunc(descriptor Descriptor, parentLayer
 			}
 
 			progressChan <- progressMessage(descriptor, "Pull complete")
-			descriptor.Registered(d.layer.DiffID())
+			withRegistered, hasRegistered := descriptor.(DescriptorWithRegistered)
+			if hasRegistered {
+				withRegistered.Registered(d.layer.DiffID())
+			}
 
 			// Doesn't actually need to be its own goroutine, but
 			// done like this so we can defer close(c).
