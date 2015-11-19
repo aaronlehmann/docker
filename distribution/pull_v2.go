@@ -293,21 +293,20 @@ func (p *v2Puller) pullV2Tag(out io.Writer, ref reference.Named) (tagUpdated boo
 				notFoundLocally = true
 			} else {
 				rootFS.Append(diffID)
-				layerDescriptor.chainID = layer.CreateChainID(rootFS.DiffIDs)
+				layerDescriptor.chainID = rootFS.ChainID()
 			}
 		}
 
 		descriptors = append(descriptors, layerDescriptor)
 	}
 
-	download, progress := p.config.DownloadManager.Download(context.Background(), descriptors)
+	// Reset list of DiffIDs for Download call, but keep base layer if any.
+	rootFS.DiffIDs = []layer.DiffID{}
+
+	download, progress := p.config.DownloadManager.Download(context.Background(), *rootFS, descriptors)
 	defer download.Release()
 
-	for {
-		prog, ok := <-progress
-		if !ok {
-			break
-		}
+	for prog := range progress {
 		if prog.Message != "" {
 			out.Write(p.sf.FormatProgress(prog.ID, prog.Message, nil))
 		} else {
@@ -317,19 +316,12 @@ func (p *v2Puller) pullV2Tag(out io.Writer, ref reference.Named) (tagUpdated boo
 		}
 	}
 
-	l, err := download.Result()
+	resultRootFS, err := download.Result()
 	if err != nil {
 		return false, err
 	}
 
-	rootFS.DiffIDs = []layer.DiffID{}
-
-	for l != nil {
-		rootFS.DiffIDs = append([]layer.DiffID{l.DiffID()}, rootFS.DiffIDs...)
-		l = l.Parent()
-	}
-
-	config, err := v1.MakeConfigFromV1Config([]byte(verifiedManifest.History[0].V1Compatibility), rootFS, history)
+	config, err := v1.MakeConfigFromV1Config([]byte(verifiedManifest.History[0].V1Compatibility), &resultRootFS, history)
 	if err != nil {
 		return false, err
 	}
