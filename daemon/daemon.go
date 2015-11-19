@@ -735,7 +735,7 @@ func NewDaemon(config *Config, registryService *registry.Service) (daemon *Daemo
 	}
 
 	distributionPool := distribution.NewPool()
-	d.downloadManager = xfer.NewLayerDownloadManager(d.layerStore)
+	d.downloadManager = xfer.NewLayerDownloadManager(d.layerStore, 5)
 
 	ifs, err := image.NewFSStoreBackend(filepath.Join(imageRoot, "imagedb"))
 	if err != nil {

@@ -22,10 +22,10 @@ type LayerDownloadManager struct {
 }
 
 // NewLayerDownloadManager returns a new LayerDownloadManager.
-func NewLayerDownloadManager(layerStore layer.Store) *LayerDownloadManager {
+func NewLayerDownloadManager(layerStore layer.Store, concurrencyLimit int) *LayerDownloadManager {
 	return &LayerDownloadManager{
 		layerStore: layerStore,
-		tm:         NewTransferManager(),
+		tm:         NewTransferManager(concurrencyLimit),
 	}
 }
 
@@ -215,7 +215,7 @@ func (ldm *LayerDownloadManager) Download(ctx context.Context, initialRootFS ima
 }
 
 func (ldm *LayerDownloadManager) makeXferFunc(descriptor Descriptor, parentLayer layer.ChainID, parentDownload *downloadTransfer) DoFunc {
-	return func(progressChan chan<- Progress) Transfer {
+	return func(progressChan chan<- Progress, start <-chan struct{}, inactive chan<- struct{}) Transfer {
 		d := &downloadTransfer{
 			Transfer:   NewTransfer(),
 			layerStore: ldm.layerStore,
@@ -226,6 +226,13 @@ func (ldm *LayerDownloadManager) makeXferFunc(descriptor Descriptor, parentLayer
 				close(progressChan)
 			}()
 
+			select {
+			case <-start:
+			default:
+				progressChan <- progressMessage(descriptor, "Waiting")
+				<-start
+			}
+
 			downloadReader, size, err := descriptor.Download(d.Transfer.Context(), progressChan)
 			if err != nil {
 				d.err = err
@@ -233,6 +240,8 @@ func (ldm *LayerDownloadManager) makeXferFunc(descriptor Descriptor, parentLayer
 			}
 
 			defer downloadReader.Close()
+
+			close(inactive)
 
 			if parentDownload != nil {
 				select {
