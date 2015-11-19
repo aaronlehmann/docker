@@ -126,8 +126,12 @@ func (t *transfer) Cancel() {
 }
 
 // DoFunc is a function called by the transfer manager to actually perform
-// a transfer. It should be non-blocking.
-type DoFunc func(chan<- Progress) Transfer
+// a transfer. It should be non-blocking. It should wait until the start channel
+// is closed before transfering any data. If the function closes inactive, that
+// signals to the transfer manager that the job is no longer actively moving
+// data - for example, it may be waiting for a dependent tranfer to finish.
+// This prevents it from taking up a slot.
+type DoFunc func(progressChan chan<- Progress, start <-chan struct{}, inactive chan<- struct{}) Transfer
 
 // TransferManager is used by LayerDownloadManager and LayerUploadManager to
 // schedule and deduplicate transfers. Transfers are scheduled based on
@@ -136,8 +140,7 @@ type DoFunc func(chan<- Progress) Transfer
 type TransferManager interface {
 	// Transfer checks if a transfer with the given key is in progress. If
 	// so, it returns progress and error output from that transfer.
-	// Otherwise, when the transfer manager deems appropriate, it will call
-	// xferFunc to initiate the transfer.
+	// Otherwise, it will call xferFunc to initiate the transfer.
 	//
 	// If dependency is non-nil, the transfer manager should try to
 	// prioritize transfers so that the one referenced by dependency
@@ -149,13 +152,17 @@ type TransferManager interface {
 type transferManager struct {
 	mu sync.Mutex
 
-	transfers map[string]Transfer
+	concurrencyLimit int
+	activeTransfers  int
+	transfers        map[string]Transfer
+	waitingTransfers []chan struct{}
 }
 
 // NewTransferManager returns a new TransferManager.
-func NewTransferManager() TransferManager {
+func NewTransferManager(concurrencyLimit int) TransferManager {
 	return &transferManager{
-		transfers: make(map[string]Transfer),
+		concurrencyLimit: concurrencyLimit,
+		transfers:        make(map[string]Transfer),
 	}
 }
 
@@ -175,19 +182,58 @@ func (tm *transferManager) Transfer(key string, xferFunc DoFunc, progressChan ch
 		return xfer
 	}
 
+	start := make(chan struct{})
+	inactive := make(chan struct{})
+
+	if tm.activeTransfers < tm.concurrencyLimit {
+		close(start)
+		tm.activeTransfers++
+	} else {
+		tm.waitingTransfers = append(tm.waitingTransfers, start)
+	}
+
 	masterProgressChan := make(chan Progress)
-	xfer := xferFunc(masterProgressChan)
+	xfer := xferFunc(masterProgressChan, start, inactive)
 	xfer.Watch(progressChan)
 	go xfer.Broadcast(masterProgressChan)
 	tm.transfers[key] = xfer
 
 	// When the transfer is finished, remove from the map.
 	go func() {
-		<-xfer.Done()
-		tm.mu.Lock()
-		delete(tm.transfers, key)
-		tm.mu.Unlock()
+		for {
+			select {
+			case <-inactive:
+				tm.mu.Lock()
+				tm.inactivate(start)
+				tm.mu.Unlock()
+				inactive = nil
+			case <-xfer.Done():
+				tm.mu.Lock()
+				if inactive != nil {
+					tm.inactivate(start)
+				}
+				delete(tm.transfers, key)
+				tm.mu.Unlock()
+				return
+			}
+		}
 	}()
 
 	return xfer
+}
+
+func (tm *transferManager) inactivate(start chan struct{}) {
+	// If the transfer was started, remove it from the activeTransfers
+	// count.
+	select {
+	case <-start:
+		// Start next transfer if any are waiting
+		if len(tm.waitingTransfers) != 0 {
+			close(tm.waitingTransfers[0])
+			tm.waitingTransfers = tm.waitingTransfers[1:]
+		} else {
+			tm.activeTransfers--
+		}
+	default:
+	}
 }
