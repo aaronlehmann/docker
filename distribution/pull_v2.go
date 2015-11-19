@@ -129,9 +129,7 @@ func (w *tmpFileWrapper) Close() error {
 }
 
 type layerDescriptor struct {
-	chainID        layer.ChainID
 	digest         digest.Digest
-	layerStore     layer.Store
 	repo           distribution.Repository
 	blobSumService *metadata.BlobSumService
 }
@@ -140,11 +138,8 @@ func (ld *layerDescriptor) Key() string {
 	return ld.digest.String()
 }
 
-func (ld *layerDescriptor) Layer() (layer.Layer, error) {
-	if ld.chainID == "" {
-		return nil, errors.New("layer not available")
-	}
-	return ld.layerStore.Get(ld.chainID)
+func (ld *layerDescriptor) DiffID() (layer.DiffID, error) {
+	return ld.blobSumService.GetDiffID(ld.digest)
 }
 
 func (ld *layerDescriptor) Download(ctx context.Context, progressChan chan<- xfer.Progress) (io.ReadCloser, int64, error) {
@@ -254,8 +249,6 @@ func (p *v2Puller) pullV2Tag(out io.Writer, ref reference.Named) (tagUpdated boo
 	// Image history converted to the new format
 	var history []image.History
 
-	notFoundLocally := false
-
 	// Note that the order of this loop is in the direction of bottom-most
 	// to top-most, so that the downloads slice gets ordered correctly.
 	for i := len(verifiedManifest.FSLayers) - 1; i >= 0; i-- {
@@ -280,28 +273,12 @@ func (p *v2Puller) pullV2Tag(out io.Writer, ref reference.Named) (tagUpdated boo
 
 		layerDescriptor := &layerDescriptor{
 			digest:         blobSum,
-			layerStore:     p.config.LayerStore,
 			repo:           p.repo,
 			blobSumService: p.blobSumService,
 		}
 
-		// Do we have a possible layer on disk corresponding to the set
-		// of blobsums up to this point?
-		if !notFoundLocally {
-			diffID, err := p.blobSumService.GetDiffID(blobSum)
-			if err != nil {
-				notFoundLocally = true
-			} else {
-				rootFS.Append(diffID)
-				layerDescriptor.chainID = rootFS.ChainID()
-			}
-		}
-
 		descriptors = append(descriptors, layerDescriptor)
 	}
-
-	// Reset list of DiffIDs for Download call, but keep base layer if any.
-	rootFS.DiffIDs = []layer.DiffID{}
 
 	download, progress := p.config.DownloadManager.Download(context.Background(), *rootFS, descriptors)
 	defer download.Release()

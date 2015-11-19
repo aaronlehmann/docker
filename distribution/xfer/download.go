@@ -76,9 +76,10 @@ func (d *returnedDownload) Result() (image.RootFS, error) {
 // A Descriptor references a layer that may need to be downloaded.
 type Descriptor interface {
 	Key() string
-	// Layer should return a reference to the layer, or an error if the
-	// layer is not present (such as before calling Download).
-	Layer() (layer.Layer, error)
+	// DiffID should return the DiffID for this layer, or an error
+	// if it is unknown (for example, if it has not been downloaded
+	// before).
+	DiffID() (layer.DiffID, error)
 	Download(ctx context.Context, progressChan chan<- Progress) (io.ReadCloser, int64, error)
 	Registered(diffID layer.DiffID)
 }
@@ -108,25 +109,33 @@ func (ldm *LayerDownloadManager) Download(ctx context.Context, initialRootFS ima
 		}()
 
 		var (
-			topLayer    layer.Layer
-			topDownload *downloadTransfer
+			topLayer     layer.Layer
+			topDownload  *downloadTransfer
+			missingLayer bool
 		)
 
 		transferKey := ""
 		for _, descriptor := range layers {
 			transferKey += descriptor.Key()
 
-			l, err := descriptor.Layer()
-			if err == nil {
-				// Layer already exists.
-				logrus.Debugf("Layer already exists: %s", descriptor.Key())
-				progressChan <- progressMessage(descriptor, "Already exists")
-				initialRootFS.Append(l.DiffID())
-				if topLayer != nil {
-					layer.ReleaseAndLog(ldm.layerStore, topLayer)
+			if !missingLayer {
+				missingLayer = true
+				diffID, err := descriptor.DiffID()
+				if err == nil {
+					initialRootFS.Append(diffID)
+					l, err := ldm.layerStore.Get(initialRootFS.ChainID())
+					if err == nil {
+						// Layer already exists.
+						logrus.Debugf("Layer already exists: %s", descriptor.Key())
+						progressChan <- progressMessage(descriptor, "Already exists")
+						if topLayer != nil {
+							layer.ReleaseAndLog(ldm.layerStore, topLayer)
+						}
+						topLayer = l
+						missingLayer = false
+						continue
+					}
 				}
-				topLayer = l
-				continue
 			}
 
 			// Layer is not known to exist - download and register it.
