@@ -3,6 +3,7 @@ package distribution
 import (
 	"fmt"
 	"io"
+	"os"
 	"strings"
 
 	"github.com/Sirupsen/logrus"
@@ -184,5 +185,27 @@ func validateRepoName(name string) error {
 	if name == "scratch" {
 		return fmt.Errorf("'scratch' is a reserved name")
 	}
+	return nil
+}
+
+type tmpFileWrapper struct {
+	tmpFile      *os.File
+	didFirstRead bool
+}
+
+func (w *tmpFileWrapper) Read(p []byte) (int, error) {
+	if !w.didFirstRead {
+		w.tmpFile.Seek(0, 0)
+		w.didFirstRead = true
+	}
+	return w.tmpFile.Read(p)
+}
+
+func (w *tmpFileWrapper) Close() error {
+	w.tmpFile.Close()
+	if err := os.RemoveAll(w.tmpFile.Name()); err != nil {
+		logrus.Errorf("Failed to remove temp file: %s", w.tmpFile.Name())
+	}
+
 	return nil
 }

@@ -106,43 +106,25 @@ func (p *v2Puller) pullV2Repository(ref reference.Named) (err error) {
 	return nil
 }
 
-type tmpFileWrapper struct {
-	tmpFile      *os.File
-	didFirstRead bool
-}
-
-func (w *tmpFileWrapper) Read(p []byte) (int, error) {
-	if !w.didFirstRead {
-		w.tmpFile.Seek(0, 0)
-		w.didFirstRead = true
-	}
-	return w.tmpFile.Read(p)
-}
-
-func (w *tmpFileWrapper) Close() error {
-	w.tmpFile.Close()
-	if err := os.RemoveAll(w.tmpFile.Name()); err != nil {
-		logrus.Errorf("Failed to remove temp file: %s", w.tmpFile.Name())
-	}
-
-	return nil
-}
-
-type layerDescriptor struct {
+type v2LayerDescriptor struct {
 	digest         digest.Digest
 	repo           distribution.Repository
 	blobSumService *metadata.BlobSumService
 }
 
-func (ld *layerDescriptor) Key() string {
-	return ld.digest.String()
+func (ld *v2LayerDescriptor) Key() string {
+	return "v2:" + ld.digest.String()
 }
 
-func (ld *layerDescriptor) DiffID() (layer.DiffID, error) {
+func (ld *v2LayerDescriptor) ID() string {
+	return stringid.TruncateID(ld.digest.String())
+}
+
+func (ld *v2LayerDescriptor) DiffID() (layer.DiffID, error) {
 	return ld.blobSumService.GetDiffID(ld.digest)
 }
 
-func (ld *layerDescriptor) Download(ctx context.Context, progressChan chan<- xfer.Progress) (io.ReadCloser, int64, error) {
+func (ld *v2LayerDescriptor) Download(ctx context.Context, progressChan chan<- xfer.Progress) (io.ReadCloser, int64, error) {
 	logrus.Debugf("pulling blob %q", ld.digest)
 
 	blobs := ld.repo.Blobs(ctx)
@@ -172,10 +154,10 @@ func (ld *layerDescriptor) Download(ctx context.Context, progressChan chan<- xfe
 		return nil, 0, err
 	}
 
-	reader := xfer.NewProgressReader(ioutil.NopCloser(io.TeeReader(layerDownload, verifier)), progressChan, desc.Size, stringid.TruncateID(ld.Key()), "Downloading")
+	reader := xfer.NewProgressReader(ioutil.NopCloser(io.TeeReader(layerDownload, verifier)), progressChan, desc.Size, ld.ID(), "Downloading")
 	io.Copy(tmpFileWrapper.tmpFile, reader)
 
-	progressChan <- xfer.Progress{ID: stringid.TruncateID(ld.Key()), Message: "Verifying Checksum"}
+	progressChan <- xfer.Progress{ID: ld.ID(), Message: "Verifying Checksum"}
 
 	if !verifier.Verified() {
 		err = fmt.Errorf("filesystem layer verification failed for digest %s", ld.digest)
@@ -188,14 +170,14 @@ func (ld *layerDescriptor) Download(ctx context.Context, progressChan chan<- xfe
 		return nil, 0, err
 	}
 
-	progressChan <- xfer.Progress{ID: stringid.TruncateID(ld.Key()), Message: "Download complete"}
+	progressChan <- xfer.Progress{ID: ld.ID(), Message: "Download complete"}
 
-	logrus.Debugf("Downloaded %s to tempfile %s", ld.Key(), tmpFileWrapper.tmpFile.Name())
+	logrus.Debugf("Downloaded %s to tempfile %s", ld.ID(), tmpFileWrapper.tmpFile.Name())
 
 	return tmpFileWrapper, desc.Size, nil
 }
 
-func (ld *layerDescriptor) Registered(diffID layer.DiffID) {
+func (ld *v2LayerDescriptor) Registered(diffID layer.DiffID) {
 	// Cache mapping from this layer's DiffID to the blobsum
 	ld.blobSumService.Add(diffID, ld.digest)
 }
@@ -271,7 +253,7 @@ func (p *v2Puller) pullV2Tag(out io.Writer, ref reference.Named) (tagUpdated boo
 			continue
 		}
 
-		layerDescriptor := &layerDescriptor{
+		layerDescriptor := &v2LayerDescriptor{
 			digest:         blobSum,
 			repo:           p.repo,
 			blobSumService: p.blobSumService,
