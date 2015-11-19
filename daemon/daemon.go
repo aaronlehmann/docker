@@ -127,7 +127,6 @@ type Daemon struct {
 	containers                *contStore
 	execCommands              *exec.Store
 	tagStore                  tag.Store
-	distributionPool          *distribution.Pool // FIXME: remove
 	downloadManager           *xfer.LayerDownloadManager
 	distributionMetadataStore dmetadata.Store
 	trustKey                  libtrust.PrivateKey
@@ -734,7 +733,6 @@ func NewDaemon(config *Config, registryService *registry.Service) (daemon *Daemo
 		return nil, err
 	}
 
-	distributionPool := distribution.NewPool()
 	d.downloadManager = xfer.NewLayerDownloadManager(d.layerStore, 5)
 
 	ifs, err := image.NewFSStoreBackend(filepath.Join(imageRoot, "imagedb"))
@@ -833,7 +831,6 @@ func NewDaemon(config *Config, registryService *registry.Service) (daemon *Daemo
 	d.containers = &contStore{s: make(map[string]*Container)}
 	d.execCommands = exec.NewStore()
 	d.tagStore = tagStore
-	d.distributionPool = distributionPool
 	d.distributionMetadataStore = distributionMetadataStore
 	d.trustKey = trustKey
 	d.idIndex = truncindex.NewTruncIndex([]string{})
@@ -1056,7 +1053,6 @@ func (daemon *Daemon) PullImage(ref reference.Named, metaHeaders map[string][]st
 		LayerStore:      daemon.layerStore,
 		ImageStore:      daemon.imageStore,
 		TagStore:        daemon.tagStore,
-		Pool:            daemon.distributionPool,
 		DownloadManager: daemon.downloadManager,
 	}
 

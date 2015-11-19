@@ -44,8 +44,6 @@ type ImagePullConfig struct {
 	ImageStore image.Store
 	// TagStore manages tags.
 	TagStore tag.Store
-	// Pool manages concurrent pulls. (FIXME: remove)
-	Pool *Pool
 	// DownloadManager manages concurrent pulls.
 	DownloadManager *xfer.LayerDownloadManager
 }
