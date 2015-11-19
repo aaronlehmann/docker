@@ -6,6 +6,7 @@ import (
 	"io"
 
 	"github.com/Sirupsen/logrus"
+	"github.com/docker/docker/image"
 	"github.com/docker/docker/layer"
 	"github.com/docker/docker/pkg/archive"
 	"github.com/docker/docker/pkg/stringid"
@@ -42,7 +43,7 @@ func (d *downloadTransfer) result() (layer.Layer, error) {
 // the result of the nonblocking operation, and to release the resources
 // associated with it.
 type Download interface {
-	Result() (layer.Layer, error)
+	Result() (image.RootFS, error)
 	Release()
 }
 
@@ -53,6 +54,8 @@ type returnedDownload struct {
 
 	topDownload  *downloadTransfer
 	progressChan chan<- Progress // used by Release
+
+	rootFS image.RootFS
 }
 
 // Release frees the resources associated with the download.
@@ -66,11 +69,8 @@ func (d *returnedDownload) Release() {
 
 // Result returns the top layer for the image, if all layers were obtained
 // successfully.
-func (d *returnedDownload) Result() (layer.Layer, error) {
-	if d.topDownload != nil {
-		return d.topDownload.result()
-	}
-	return d.layer, d.err
+func (d *returnedDownload) Result() (image.RootFS, error) {
+	return d.rootFS, d.err
 }
 
 // A Descriptor references a layer that may need to be downloaded.
@@ -92,7 +92,9 @@ type Descriptor interface {
 // Once the Progress channel is closed, the caller may call the Result
 // method of the Download object. The caller must call the Release method
 // of the Download object once it is finished with the returned layer.
-func (ldm *LayerDownloadManager) Download(ctx context.Context, layers []Descriptor) (Download, chan Progress) {
+// initialRootFS is generally an empty RootFS object, but may reference a base
+// layer if applicable.
+func (ldm *LayerDownloadManager) Download(ctx context.Context, initialRootFS image.RootFS, layers []Descriptor) (Download, chan Progress) {
 	// Include a buffer so that slow client connections don't affect
 	// transfer performance.
 	progressChan := make(chan Progress, 100)
@@ -119,6 +121,7 @@ func (ldm *LayerDownloadManager) Download(ctx context.Context, layers []Descript
 				// Layer already exists.
 				logrus.Debugf("Layer already exists: %s", descriptor.Key())
 				progressChan <- progressMessage(descriptor, "Already exists")
+				initialRootFS.Append(l.DiffID())
 				if topLayer != nil {
 					layer.ReleaseAndLog(ldm.layerStore, topLayer)
 				}
@@ -143,8 +146,13 @@ func (ldm *LayerDownloadManager) Download(ctx context.Context, layers []Descript
 
 		if topDownload == nil {
 			returnedDownload.layer = topLayer
+			returnedDownload.rootFS = initialRootFS
 			return
 		}
+
+		// Won't be using the list built up so far - will generate it
+		// from downloaded layers instead.
+		initialRootFS.DiffIDs = []layer.DiffID{}
 
 		defer func() {
 			if topLayer != nil {
@@ -152,7 +160,6 @@ func (ldm *LayerDownloadManager) Download(ctx context.Context, layers []Descript
 			}
 		}()
 
-		logrus.Debug("waiting for topdownload")
 	selectLoop:
 		for {
 			select {
@@ -163,7 +170,17 @@ func (ldm *LayerDownloadManager) Download(ctx context.Context, layers []Descript
 				break selectLoop
 			}
 		}
-		logrus.Debug("done waiting for topdownload")
+
+		l, err := topDownload.result()
+		returnedDownload.err = err
+
+		if err == nil {
+			for l != nil {
+				initialRootFS.DiffIDs = append([]layer.DiffID{l.DiffID()}, initialRootFS.DiffIDs...)
+				l = l.Parent()
+			}
+			returnedDownload.rootFS = initialRootFS
+		}
 
 		returnedDownload.topDownload = topDownload
 		returnedDownload.progressChan = progressChan
