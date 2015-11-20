@@ -128,6 +128,7 @@ type Daemon struct {
 	execCommands              *exec.Store
 	tagStore                  tag.Store
 	downloadManager           *xfer.LayerDownloadManager
+	uploadManager             *xfer.LayerUploadManager
 	distributionMetadataStore dmetadata.Store
 	trustKey                  libtrust.PrivateKey
 	idIndex                   *truncindex.TruncIndex
@@ -734,6 +735,7 @@ func NewDaemon(config *Config, registryService *registry.Service) (daemon *Daemo
 	}
 
 	d.downloadManager = xfer.NewLayerDownloadManager(d.layerStore, 5)
+	d.uploadManager = xfer.NewLayerUploadManager(5)
 
 	ifs, err := image.NewFSStoreBackend(filepath.Join(imageRoot, "imagedb"))
 	if err != nil {
@@ -1078,6 +1080,7 @@ func (daemon *Daemon) PushImage(ref reference.Named, metaHeaders map[string][]st
 		ImageStore:      daemon.imageStore,
 		TagStore:        daemon.tagStore,
 		TrustKey:        daemon.trustKey,
+		UploadManager:   daemon.uploadManager,
 	}
 
 	return distribution.Push(ref, imagePushConfig)

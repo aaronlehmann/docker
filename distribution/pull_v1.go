@@ -230,7 +230,7 @@ func (p *v1Puller) pullImage(out io.Writer, v1ID, endpoint string, localNameRef 
 	out.Write(p.sf.FormatProgress(stringid.TruncateID(v1ID), "Pulling dependent layers", nil))
 
 	var (
-		descriptors []xfer.Descriptor
+		descriptors []xfer.DownloadDescriptor
 		newHistory  []image.History
 		img         *image.V1Image
 		imgJSON     []byte

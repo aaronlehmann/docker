@@ -226,7 +226,7 @@ func (p *v2Puller) pullV2Tag(out io.Writer, ref reference.Named) (tagUpdated boo
 
 	out.Write(p.sf.FormatStatus(tagOrDigest, "Pulling from %s", p.repo.Name()))
 
-	var descriptors []xfer.Descriptor
+	var descriptors []xfer.DownloadDescriptor
 
 	// Image history converted to the new format
 	var history []image.History

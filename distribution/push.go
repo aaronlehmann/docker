@@ -12,6 +12,7 @@ import (
 	"github.com/docker/docker/cliconfig"
 	"github.com/docker/docker/daemon/events"
 	"github.com/docker/docker/distribution/metadata"
+	"github.com/docker/docker/distribution/xfer"
 	"github.com/docker/docker/image"
 	"github.com/docker/docker/layer"
 	"github.com/docker/docker/pkg/streamformatter"
@@ -48,6 +49,8 @@ type ImagePushConfig struct {
 	// TrustKey is the private key for legacy signatures. This is typically
 	// an ephemeral key, since these signatures are no longer verified.
 	TrustKey libtrust.PrivateKey
+	// UploadManager dispatches uploads.
+	UploadManager *xfer.LayerUploadManager
 }
 
 // Pusher is an interface that abstracts pushing for different API versions.
@@ -76,7 +79,7 @@ func NewPusher(ref reference.Named, endpoint registry.APIEndpoint, repoInfo *reg
 			repoInfo:       repoInfo,
 			config:         imagePushConfig,
 			sf:             sf,
-			layersPushed:   make(map[digest.Digest]bool),
+			layersPushed:   pushMap{layersPushed: make(map[digest.Digest]bool)},
 		}, nil
 	case registry.APIVersion1:
 		return &v1Pusher{
