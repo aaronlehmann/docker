@@ -68,7 +68,7 @@ func (daemon *Daemon) ImportImage(src string, newRef reference.Named, msg string
 	if err != nil {
 		return err
 	}
-	defer layer.ReleaseAndLog(daemon.layerStore, l)
+	defer daemon.layerStore.ReleaseAndLog(l)
 
 	created := time.Now().UTC()
 	imgConfig, err := json.Marshal(&image.Image{

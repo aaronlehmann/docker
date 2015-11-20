@@ -9,7 +9,6 @@ import (
 	"github.com/docker/distribution/reference"
 	"github.com/docker/docker/api/types"
 	"github.com/docker/docker/image"
-	"github.com/docker/docker/layer"
 	"github.com/docker/docker/pkg/parsers/filters"
 )
 
@@ -102,7 +101,7 @@ func (daemon *Daemon) Images(filterArgs, filter string, all bool) ([]*types.Imag
 			}
 
 			size, err = l.Size()
-			layer.ReleaseAndLog(daemon.layerStore, l)
+			daemon.layerStore.ReleaseAndLog(l)
 			if err != nil {
 				return nil, err
 			}
