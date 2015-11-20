@@ -1,13 +1,11 @@
 package distribution
 
 import (
-	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
 	"io/ioutil"
 	"strings"
-	"sync"
 	"time"
 
 	"github.com/Sirupsen/logrus"
@@ -112,44 +110,16 @@ func (p *v1Puller) pullRepository(ref reference.Named) error {
 		}
 	}
 
-	errors := make(chan error)
-	layerDownloaded := make(chan struct{})
-
 	layersDownloaded := false
-	var wg sync.WaitGroup
 	for _, imgData := range repoData.ImgList {
 		if isTagged && imgData.Tag != tagged.Tag() {
 			continue
 		}
 
-		wg.Add(1)
-		go func(img *registry.ImgData) {
-			p.downloadImage(out, repoData, img, layerDownloaded, errors)
-			wg.Done()
-		}(imgData)
-	}
-
-	go func() {
-		wg.Wait()
-		close(errors)
-	}()
-
-	var lastError error
-selectLoop:
-	for {
-		select {
-		case err, ok := <-errors:
-			if !ok {
-				break selectLoop
-			}
-			lastError = err
-		case <-layerDownloaded:
-			layersDownloaded = true
+		err := p.downloadImage(out, repoData, imgData, &layersDownloaded)
+		if err != nil {
+			return err
 		}
-	}
-
-	if lastError != nil {
-		return lastError
 	}
 
 	localNameRef := p.repoInfo.LocalName
@@ -163,22 +133,21 @@ selectLoop:
 	return nil
 }
 
-func (p *v1Puller) downloadImage(out io.Writer, repoData *registry.RepositoryData, img *registry.ImgData, layerDownloaded chan<- struct{}, errors chan error) {
+func (p *v1Puller) downloadImage(out io.Writer, repoData *registry.RepositoryData, img *registry.ImgData, layersDownloaded *bool) error {
 	if img.Tag == "" {
 		logrus.Debugf("Image (id: %s) present in this repository but untagged, skipping", img.ID)
-		return
+		return nil
 	}
 
 	localNameRef, err := reference.WithTag(p.repoInfo.LocalName, img.Tag)
 	if err != nil {
 		retErr := fmt.Errorf("Image (id: %s) has invalid tag: %s", img.ID, img.Tag)
 		logrus.Debug(retErr.Error())
-		errors <- retErr
+		return retErr
 	}
 
 	if err := v1.ValidateID(img.ID); err != nil {
-		errors <- err
-		return
+		return err
 	}
 
 	out.Write(p.sf.FormatProgress(stringid.TruncateID(img.ID), fmt.Sprintf("Pulling image (%s) from %s", img.Tag, p.repoInfo.CanonicalName.Name()), nil))
@@ -187,7 +156,7 @@ func (p *v1Puller) downloadImage(out io.Writer, repoData *registry.RepositoryDat
 	for _, ep := range p.repoInfo.Index.Mirrors {
 		ep += "v1/"
 		out.Write(p.sf.FormatProgress(stringid.TruncateID(img.ID), fmt.Sprintf("Pulling image (%s) from %s, mirror: %s", img.Tag, p.repoInfo.CanonicalName.Name(), ep), nil))
-		if err = p.pullImage(out, img.ID, ep, localNameRef, layerDownloaded); err != nil {
+		if err = p.pullImage(out, img.ID, ep, localNameRef, layersDownloaded); err != nil {
 			// Don't report errors when pulling from mirrors.
 			logrus.Debugf("Error pulling image (%s) from %s, mirror: %s, %s", img.Tag, p.repoInfo.CanonicalName.Name(), ep, err)
 			continue
@@ -198,7 +167,7 @@ func (p *v1Puller) downloadImage(out io.Writer, repoData *registry.RepositoryDat
 	if !success {
 		for _, ep := range repoData.Endpoints {
 			out.Write(p.sf.FormatProgress(stringid.TruncateID(img.ID), fmt.Sprintf("Pulling image (%s) from %s, endpoint: %s", img.Tag, p.repoInfo.CanonicalName.Name(), ep), nil))
-			if err = p.pullImage(out, img.ID, ep, localNameRef, layerDownloaded); err != nil {
+			if err = p.pullImage(out, img.ID, ep, localNameRef, layersDownloaded); err != nil {
 				// It's not ideal that only the last error is returned, it would be better to concatenate the errors.
 				// As the error is also given to the output stream the user will see the error.
 				lastErr = err
@@ -212,13 +181,13 @@ func (p *v1Puller) downloadImage(out io.Writer, repoData *registry.RepositoryDat
 	if !success {
 		err := fmt.Errorf("Error pulling image (%s) from %s, %v", img.Tag, p.repoInfo.CanonicalName.Name(), lastErr)
 		out.Write(p.sf.FormatProgress(stringid.TruncateID(img.ID), err.Error(), nil))
-		errors <- err
-		return
+		return err
 	}
 	out.Write(p.sf.FormatProgress(stringid.TruncateID(img.ID), "Download complete", nil))
+	return nil
 }
 
-func (p *v1Puller) pullImage(out io.Writer, v1ID, endpoint string, localNameRef reference.Named, layerDownloaded chan<- struct{}) (err error) {
+func (p *v1Puller) pullImage(out io.Writer, v1ID, endpoint string, localNameRef reference.Named, layersDownloaded *bool) (err error) {
 	var history []string
 	history, err = p.session.GetRemoteHistory(v1ID, endpoint)
 	if err != nil {
@@ -232,7 +201,6 @@ func (p *v1Puller) pullImage(out io.Writer, v1ID, endpoint string, localNameRef 
 	var (
 		descriptors []xfer.DownloadDescriptor
 		newHistory  []image.History
-		img         *image.V1Image
 		imgJSON     []byte
 		imgSize     int64
 	)
@@ -246,11 +214,6 @@ func (p *v1Puller) pullImage(out io.Writer, v1ID, endpoint string, localNameRef 
 			return err
 		}
 
-		img = &image.V1Image{}
-		if err := json.Unmarshal(imgJSON, img); err != nil {
-			return err
-		}
-
 		// Create a new-style config from the legacy configs
 		h, err := v1.HistoryFromConfig(imgJSON, false)
 		if err != nil {
@@ -259,13 +222,13 @@ func (p *v1Puller) pullImage(out io.Writer, v1ID, endpoint string, localNameRef 
 		newHistory = append(newHistory, h)
 
 		layerDescriptor := &v1LayerDescriptor{
-			v1LayerID:       v1LayerID,
-			indexName:       p.repoInfo.Index.Name,
-			endpoint:        endpoint,
-			v1IDService:     p.v1IDService,
-			layerDownloaded: layerDownloaded,
-			layerSize:       imgSize,
-			session:         p.session,
+			v1LayerID:        v1LayerID,
+			indexName:        p.repoInfo.Index.Name,
+			endpoint:         endpoint,
+			v1IDService:      p.v1IDService,
+			layersDownloaded: layersDownloaded,
+			layerSize:        imgSize,
+			session:          p.session,
 		}
 
 		descriptors = append(descriptors, layerDescriptor)
@@ -329,13 +292,13 @@ func (p *v1Puller) downloadLayerConfig(out io.Writer, v1LayerID, endpoint string
 }
 
 type v1LayerDescriptor struct {
-	v1LayerID       string
-	indexName       string
-	endpoint        string
-	v1IDService     *metadata.V1IDService
-	layerDownloaded chan<- struct{}
-	layerSize       int64
-	session         *registry.Session
+	v1LayerID        string
+	indexName        string
+	endpoint         string
+	v1IDService      *metadata.V1IDService
+	layersDownloaded *bool
+	layerSize        int64
+	session          *registry.Session
 }
 
 func (ld *v1LayerDescriptor) Key() string {
@@ -357,7 +320,7 @@ func (ld *v1LayerDescriptor) Download(ctx context.Context, progressChan chan<- x
 		progressChan <- xfer.Progress{ID: ld.ID(), Message: "Error pulling dependent layers"}
 		return nil, 0, err
 	}
-	ld.layerDownloaded <- struct{}{}
+	*ld.layersDownloaded = true
 
 	defer layerReader.Close()
 
