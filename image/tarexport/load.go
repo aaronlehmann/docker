@@ -77,7 +77,7 @@ func (l *tarexporter) Load(inTar io.ReadCloser, outStream io.Writer) error {
 			if err != nil {
 				return err
 			}
-			defer layer.ReleaseAndLog(l.ls, newLayer)
+			defer l.ls.ReleaseAndLog(newLayer)
 			if expected, actual := diffID, newLayer.DiffID(); expected != actual {
 				return fmt.Errorf("invalid diffID for layer %d: expected %q, got %q", i, expected, actual)
 			}

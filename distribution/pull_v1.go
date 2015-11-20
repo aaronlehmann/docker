@@ -249,7 +249,7 @@ func (p *v1Puller) pullImage(out io.Writer, v1ID, endpoint string, localNameRef 
 
 	defer func() {
 		for _, l := range referencedLayers {
-			layer.ReleaseAndLog(p.config.LayerStore, l)
+			p.config.LayerStore.ReleaseAndLog(l)
 		}
 	}()
 

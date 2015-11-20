@@ -104,7 +104,7 @@ func (p *v2Pusher) pushV2Tag(association tag.Association) error {
 		if err != nil {
 			return fmt.Errorf("failed to get top layer from image: %v", err)
 		}
-		defer layer.ReleaseAndLog(p.config.LayerStore, l)
+		defer p.config.LayerStore.ReleaseAndLog(l)
 	}
 
 	fsLayers := make(map[layer.DiffID]schema1.FSLayer)

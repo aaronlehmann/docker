@@ -17,7 +17,6 @@ import (
 	"github.com/docker/docker/distribution/metadata"
 	"github.com/docker/docker/image"
 	"github.com/docker/docker/image/v1"
-	"github.com/docker/docker/layer"
 	"github.com/docker/docker/pkg/archive"
 	"github.com/docker/docker/pkg/broadcaster"
 	"github.com/docker/docker/pkg/progressreader"
@@ -280,7 +279,7 @@ func (p *v2Puller) pullV2Tag(out io.Writer, ref reference.Named) (tagUpdated boo
 					notFoundLocally = false
 					logrus.Debugf("Layer already exists: %s", blobSum.String())
 					out.Write(p.sf.FormatProgress(stringid.TruncateID(blobSum.String()), "Already exists", nil))
-					defer layer.ReleaseAndLog(p.config.LayerStore, l)
+					defer p.config.LayerStore.ReleaseAndLog(l)
 					continue
 				} else {
 					rootFS.DiffIDs = rootFS.DiffIDs[:len(rootFS.DiffIDs)-1]
@@ -341,7 +340,7 @@ func (p *v2Puller) pullV2Tag(out io.Writer, ref reference.Named) (tagUpdated boo
 				return false, err
 			}
 
-			defer layer.ReleaseAndLog(p.config.LayerStore, l)
+			defer p.config.LayerStore.ReleaseAndLog(l)
 
 			continue
 		}
@@ -374,7 +373,7 @@ func (p *v2Puller) pullV2Tag(out io.Writer, ref reference.Named) (tagUpdated boo
 			return false, err
 		}
 
-		defer layer.ReleaseAndLog(p.config.LayerStore, l)
+		defer p.config.LayerStore.ReleaseAndLog(l)
 
 		d.broadcaster.Write(p.sf.FormatProgress(stringid.TruncateID(d.digest.String()), "Pull complete", nil))
 		d.broadcaster.Close()

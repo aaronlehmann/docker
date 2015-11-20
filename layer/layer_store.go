@@ -366,6 +366,16 @@ func (ls *layerStore) releaseLayer(layer *roLayer) ([]Metadata, error) {
 	return removed, err
 }
 
+// ReleaseAndLog releases the provided layer from the given layer
+// store, logging any error and release metadata
+func (ls *layerStore) ReleaseAndLog(l Layer) {
+	metadata, err := ls.Release(l)
+	if err != nil {
+		logrus.Errorf("Error releasing layer %s: %v", l.ChainID(), err)
+	}
+	LogReleaseMetadata(metadata)
+}
+
 func (ls *layerStore) Release(l Layer) ([]Metadata, error) {
 	ls.layerL.Lock()
 	defer ls.layerL.Unlock()

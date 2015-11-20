@@ -1120,7 +1120,7 @@ func (daemon *Daemon) LookupImage(name string) (*types.ImageInspect, error) {
 		if err != nil {
 			return nil, err
 		}
-		defer layer.ReleaseAndLog(daemon.layerStore, l)
+		defer daemon.layerStore.ReleaseAndLog(l)
 		size, err = l.Size()
 		if err != nil {
 			return nil, err
@@ -1193,7 +1193,7 @@ func (daemon *Daemon) ImageHistory(name string) ([]*types.ImageHistory, error) {
 				return nil, err
 			}
 			layerSize, err = l.DiffSize()
-			layer.ReleaseAndLog(daemon.layerStore, l)
+			daemon.layerStore.ReleaseAndLog(l)
 			if err != nil {
 				return nil, err
 			}
