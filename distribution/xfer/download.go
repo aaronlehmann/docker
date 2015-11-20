@@ -79,8 +79,8 @@ func (d *returnedDownload) Result() (image.RootFS, error) {
 	return d.rootFS, d.err
 }
 
-// A Descriptor references a layer that may need to be downloaded.
-type Descriptor interface {
+// A DownloadDescriptor references a layer that may need to be downloaded.
+type DownloadDescriptor interface {
 	// Key returns the key used to deduplicate downloads.
 	Key() string
 	// ID returns the ID for display purposes.
@@ -93,13 +93,13 @@ type Descriptor interface {
 	Download(ctx context.Context, progressChan chan<- Progress) (io.ReadCloser, int64, error)
 }
 
-// DescriptorWithRegistered is a Descriptor that has an additional Registered
-// method which gets called after a downloaded layer is registered. This allows
-// the user of the download manager to know the DiffID of each registered
-// layer. This method is called if a cast to DescriptorWithRegistered is
-// successful.
-type DescriptorWithRegistered interface {
-	Descriptor
+// DownloadDescriptorWithRegistered is a DownloadDescriptor that has an
+// additional Registered method which gets called after a downloaded layer is
+// registered. This allows the user of the download manager to know the DiffID
+// of each registered layer. This method is called if a cast to
+// DownloadDescriptorWithRegistered is successful.
+type DownloadDescriptorWithRegistered interface {
+	DownloadDescriptor
 	Registered(diffID layer.DiffID)
 }
 
@@ -114,7 +114,7 @@ type DescriptorWithRegistered interface {
 // of the Download object once it is finished with the returned layer.
 // initialRootFS is generally an empty RootFS object, but may reference a base
 // layer if applicable.
-func (ldm *LayerDownloadManager) Download(ctx context.Context, initialRootFS image.RootFS, layers []Descriptor) (Download, chan Progress) {
+func (ldm *LayerDownloadManager) Download(ctx context.Context, initialRootFS image.RootFS, layers []DownloadDescriptor) (Download, <-chan Progress) {
 	// Include a buffer so that slow client connections don't affect
 	// transfer performance.
 	progressChan := make(chan Progress, 100)
@@ -146,7 +146,7 @@ func (ldm *LayerDownloadManager) Download(ctx context.Context, initialRootFS ima
 					if err == nil {
 						// Layer already exists.
 						logrus.Debugf("Layer already exists: %s", descriptor.ID())
-						progressChan <- progressMessage(descriptor, "Already exists")
+						progressChan <- downloadMessage(descriptor, "Already exists")
 						if topLayer != nil {
 							layer.ReleaseAndLog(ldm.layerStore, topLayer)
 						}
@@ -158,16 +158,16 @@ func (ldm *LayerDownloadManager) Download(ctx context.Context, initialRootFS ima
 			}
 
 			// Layer is not known to exist - download and register it.
-			progressChan <- progressMessage(descriptor, "Pulling fs layer")
+			progressChan <- downloadMessage(descriptor, "Pulling fs layer")
 
 			var xferFunc DoFunc
 			if topDownload != nil {
-				xferFunc = ldm.makeXferFunc(descriptor, "", topDownload)
+				xferFunc = ldm.makeDownloadFunc(descriptor, "", topDownload)
 				defer topDownload.Transfer.Release(progressChan)
 			} else if topLayer != nil {
-				xferFunc = ldm.makeXferFunc(descriptor, topLayer.ChainID(), nil)
+				xferFunc = ldm.makeDownloadFunc(descriptor, topLayer.ChainID(), nil)
 			} else {
-				xferFunc = ldm.makeXferFunc(descriptor, "", nil)
+				xferFunc = ldm.makeDownloadFunc(descriptor, "", nil)
 			}
 			topDownload = ldm.tm.Transfer(transferKey, xferFunc, progressChan, topDownload).(*downloadTransfer)
 		}
@@ -217,7 +217,7 @@ func (ldm *LayerDownloadManager) Download(ctx context.Context, initialRootFS ima
 	return returnedDownload, progressChan
 }
 
-func (ldm *LayerDownloadManager) makeXferFunc(descriptor Descriptor, parentLayer layer.ChainID, parentDownload *downloadTransfer) DoFunc {
+func (ldm *LayerDownloadManager) makeDownloadFunc(descriptor DownloadDescriptor, parentLayer layer.ChainID, parentDownload *downloadTransfer) DoFunc {
 	return func(progressChan chan<- Progress, start <-chan struct{}, inactive chan<- struct{}) Transfer {
 		d := &downloadTransfer{
 			Transfer:   NewTransfer(),
@@ -232,7 +232,7 @@ func (ldm *LayerDownloadManager) makeXferFunc(descriptor Descriptor, parentLayer
 			select {
 			case <-start:
 			default:
-				progressChan <- progressMessage(descriptor, "Waiting")
+				progressChan <- downloadMessage(descriptor, "Waiting")
 				<-start
 			}
 
@@ -292,8 +292,8 @@ func (ldm *LayerDownloadManager) makeXferFunc(descriptor Descriptor, parentLayer
 				return
 			}
 
-			progressChan <- progressMessage(descriptor, "Pull complete")
-			withRegistered, hasRegistered := descriptor.(DescriptorWithRegistered)
+			progressChan <- downloadMessage(descriptor, "Pull complete")
+			withRegistered, hasRegistered := descriptor.(DownloadDescriptorWithRegistered)
 			if hasRegistered {
 				withRegistered.Registered(d.layer.DiffID())
 			}
@@ -312,6 +312,6 @@ func (ldm *LayerDownloadManager) makeXferFunc(descriptor Descriptor, parentLayer
 	}
 }
 
-func progressMessage(descriptor Descriptor, message string) Progress {
+func downloadMessage(descriptor DownloadDescriptor, message string) Progress {
 	return Progress{ID: descriptor.ID(), Message: message}
 }
