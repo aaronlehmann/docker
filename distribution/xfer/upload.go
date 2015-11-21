@@ -142,5 +142,5 @@ func (lum *LayerUploadManager) makeUploadFunc(descriptor UploadDescriptor) DoFun
 }
 
 func uploadMessage(descriptor UploadDescriptor, message string) Progress {
-	return Progress{ID: descriptor.ID(), Message: message}
+	return Progress{ID: descriptor.ID(), Action: message}
 }

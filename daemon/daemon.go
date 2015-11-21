@@ -50,6 +50,7 @@ import (
 	"github.com/docker/docker/pkg/nat"
 	"github.com/docker/docker/pkg/parsers/filters"
 	"github.com/docker/docker/pkg/signal"
+	"github.com/docker/docker/pkg/streamformatter"
 	"github.com/docker/docker/pkg/stringid"
 	"github.com/docker/docker/pkg/stringutils"
 	"github.com/docker/docker/pkg/sysinfo"
@@ -1042,23 +1043,48 @@ func (daemon *Daemon) TagImage(newTag reference.Named, imageName string, force b
 	return daemon.tagStore.Add(newTag, imageID, force)
 }
 
+func writeDistributionProgress(outStream io.Writer, progressChan <-chan xfer.Progress) {
+	sf := streamformatter.NewJSONStreamFormatter()
+	for prog := range progressChan {
+		if prog.Message != "" {
+			outStream.Write(sf.FormatStatus(prog.ID, prog.Message))
+		} else {
+			jsonProgress := jsonmessage.JSONProgress{Current: prog.Current, Total: prog.Total}
+			outStream.Write(sf.FormatProgress(prog.ID, prog.Action, &jsonProgress))
+		}
+	}
+}
+
 // PullImage initiates a pull operation. image is the repository name to pull, and
 // tag may be either empty, or indicate a specific tag to pull.
 func (daemon *Daemon) PullImage(ref reference.Named, metaHeaders map[string][]string, authConfig *cliconfig.AuthConfig, outStream io.Writer) error {
+	// Include a buffer so that slow client connections don't affect
+	// transfer performance.
+	progressChan := make(chan xfer.Progress, 100)
+
+	writesDone := make(chan struct{})
+
+	go func() {
+		writeDistributionProgress(outStream, progressChan)
+		close(writesDone)
+	}()
+
 	imagePullConfig := &distribution.ImagePullConfig{
 		MetaHeaders:     metaHeaders,
 		AuthConfig:      authConfig,
-		OutStream:       outStream,
+		ProgressChan:    progressChan,
 		RegistryService: daemon.RegistryService,
 		EventsService:   daemon.EventsService,
 		MetadataStore:   daemon.distributionMetadataStore,
-		LayerStore:      daemon.layerStore,
 		ImageStore:      daemon.imageStore,
 		TagStore:        daemon.tagStore,
 		DownloadManager: daemon.downloadManager,
 	}
 
-	return distribution.Pull(ref, imagePullConfig)
+	err := distribution.Pull(ref, imagePullConfig)
+	close(progressChan)
+	<-writesDone
+	return err
 }
 
 // ExportImage exports a list of images to the given output stream. The

@@ -2,7 +2,6 @@ package distribution
 
 import (
 	"fmt"
-	"io"
 	"os"
 	"strings"
 
@@ -13,8 +12,6 @@ import (
 	"github.com/docker/docker/distribution/metadata"
 	"github.com/docker/docker/distribution/xfer"
 	"github.com/docker/docker/image"
-	"github.com/docker/docker/layer"
-	"github.com/docker/docker/pkg/streamformatter"
 	"github.com/docker/docker/registry"
 	"github.com/docker/docker/tag"
 )
@@ -27,9 +24,9 @@ type ImagePullConfig struct {
 	// AuthConfig holds authentication credentials for authenticating with
 	// the registry.
 	AuthConfig *cliconfig.AuthConfig
-	// OutStream is the output writer for showing the status of the pull
+	// ProgressChan is the output channel for showing the status of the pull
 	// operation.
-	OutStream io.Writer
+	ProgressChan chan<- xfer.Progress
 	// RegistryService is the registry service to use for TLS configuration
 	// and endpoint lookup.
 	RegistryService *registry.Service
@@ -38,8 +35,6 @@ type ImagePullConfig struct {
 	// MetadataStore is the storage backend for distribution-specific
 	// metadata.
 	MetadataStore metadata.Store
-	// LayerStore manages layers.
-	LayerStore layer.Store
 	// ImageStore manages images.
 	ImageStore image.Store
 	// TagStore manages tags.
@@ -61,14 +56,13 @@ type Puller interface {
 // whether a v1 or v2 puller will be created. The other parameters are passed
 // through to the underlying puller implementation for use during the actual
 // pull operation.
-func newPuller(endpoint registry.APIEndpoint, repoInfo *registry.RepositoryInfo, imagePullConfig *ImagePullConfig, sf *streamformatter.StreamFormatter) (Puller, error) {
+func newPuller(endpoint registry.APIEndpoint, repoInfo *registry.RepositoryInfo, imagePullConfig *ImagePullConfig) (Puller, error) {
 	switch endpoint.Version {
 	case registry.APIVersion2:
 		return &v2Puller{
 			blobSumService: metadata.NewBlobSumService(imagePullConfig.MetadataStore),
 			endpoint:       endpoint,
 			config:         imagePullConfig,
-			sf:             sf,
 			repoInfo:       repoInfo,
 		}, nil
 	case registry.APIVersion1:
@@ -76,7 +70,6 @@ func newPuller(endpoint registry.APIEndpoint, repoInfo *registry.RepositoryInfo,
 			v1IDService: metadata.NewV1IDService(imagePullConfig.MetadataStore),
 			endpoint:    endpoint,
 			config:      imagePullConfig,
-			sf:          sf,
 			repoInfo:    repoInfo,
 		}, nil
 	}
@@ -86,8 +79,6 @@ func newPuller(endpoint registry.APIEndpoint, repoInfo *registry.RepositoryInfo,
 // Pull initiates a pull operation. image is the repository name to pull, and
 // tag may be either empty, or indicate a specific tag to pull.
 func Pull(ref reference.Named, imagePullConfig *ImagePullConfig) error {
-	var sf = streamformatter.NewJSONStreamFormatter()
-
 	// Resolve the Repository name from fqn to RepositoryInfo
 	repoInfo, err := imagePullConfig.RegistryService.ResolveRepository(ref)
 	if err != nil {
@@ -122,7 +113,7 @@ func Pull(ref reference.Named, imagePullConfig *ImagePullConfig) error {
 	for _, endpoint := range endpoints {
 		logrus.Debugf("Trying to pull %s from %s %s", repoInfo.LocalName, endpoint.URL, endpoint.Version)
 
-		puller, err := newPuller(endpoint, repoInfo, imagePullConfig, sf)
+		puller, err := newPuller(endpoint, repoInfo, imagePullConfig)
 		if err != nil {
 			errors = append(errors, err.Error())
 			continue
@@ -167,11 +158,11 @@ func Pull(ref reference.Named, imagePullConfig *ImagePullConfig) error {
 // status message indicates that a newer image was downloaded. Otherwise, it
 // indicates that the image is up to date. requestedTag is the tag the message
 // will refer to.
-func writeStatus(requestedTag string, out io.Writer, sf *streamformatter.StreamFormatter, layersDownloaded bool) {
+func writeStatus(requestedTag string, out chan<- xfer.Progress, layersDownloaded bool) {
 	if layersDownloaded {
-		out.Write(sf.FormatStatus("", "Status: Downloaded newer image for %s", requestedTag))
+		out <- xfer.Progress{Message: "Status: Downloaded newer image for " + requestedTag}
 	} else {
-		out.Write(sf.FormatStatus("", "Status: Image is up to date for %s", requestedTag))
+		out <- xfer.Progress{Message: "Status: Image is up to date for " + requestedTag}
 	}
 }
 
