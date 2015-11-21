@@ -19,8 +19,6 @@ import (
 	"github.com/docker/docker/image"
 	"github.com/docker/docker/image/v1"
 	"github.com/docker/docker/layer"
-	"github.com/docker/docker/pkg/jsonmessage"
-	"github.com/docker/docker/pkg/streamformatter"
 	"github.com/docker/docker/pkg/stringid"
 	"github.com/docker/docker/registry"
 	"golang.org/x/net/context"
@@ -30,7 +28,6 @@ type v2Puller struct {
 	blobSumService *metadata.BlobSumService
 	endpoint       registry.APIEndpoint
 	config         *ImagePullConfig
-	sf             *streamformatter.StreamFormatter
 	repoInfo       *registry.RepositoryInfo
 	repo           distribution.Repository
 }
@@ -94,14 +91,14 @@ func (p *v2Puller) pullV2Repository(ref reference.Named) (err error) {
 	for _, pullRef := range refs {
 		// pulledNew is true if either new layers were downloaded OR if existing images were newly tagged
 		// TODO(tiborvass): should we change the name of `layersDownload`? What about message in WriteStatus?
-		pulledNew, err := p.pullV2Tag(p.config.OutStream, pullRef)
+		pulledNew, err := p.pullV2Tag(pullRef)
 		if err != nil {
 			return err
 		}
 		layersDownloaded = layersDownloaded || pulledNew
 	}
 
-	writeStatus(taggedName.String(), p.config.OutStream, p.sf, layersDownloaded)
+	writeStatus(taggedName.String(), p.config.ProgressChan, layersDownloaded)
 
 	return nil
 }
@@ -157,7 +154,7 @@ func (ld *v2LayerDescriptor) Download(ctx context.Context, progressChan chan<- x
 	reader := xfer.NewProgressReader(ioutil.NopCloser(io.TeeReader(layerDownload, verifier)), progressChan, desc.Size, ld.ID(), "Downloading")
 	io.Copy(tmpFileWrapper.tmpFile, reader)
 
-	progressChan <- xfer.Progress{ID: ld.ID(), Message: "Verifying Checksum"}
+	progressChan <- xfer.Progress{ID: ld.ID(), Action: "Verifying Checksum"}
 
 	if !verifier.Verified() {
 		err = fmt.Errorf("filesystem layer verification failed for digest %s", ld.digest)
@@ -170,7 +167,7 @@ func (ld *v2LayerDescriptor) Download(ctx context.Context, progressChan chan<- x
 		return nil, 0, err
 	}
 
-	progressChan <- xfer.Progress{ID: ld.ID(), Message: "Download complete"}
+	progressChan <- xfer.Progress{ID: ld.ID(), Action: "Download complete"}
 
 	logrus.Debugf("Downloaded %s to tempfile %s", ld.ID(), tmpFileWrapper.tmpFile.Name())
 
@@ -182,7 +179,7 @@ func (ld *v2LayerDescriptor) Registered(diffID layer.DiffID) {
 	ld.blobSumService.Add(diffID, ld.digest)
 }
 
-func (p *v2Puller) pullV2Tag(out io.Writer, ref reference.Named) (tagUpdated bool, err error) {
+func (p *v2Puller) pullV2Tag(ref reference.Named) (tagUpdated bool, err error) {
 	tagOrDigest := ""
 	if tagged, isTagged := ref.(reference.Tagged); isTagged {
 		tagOrDigest = tagged.Tag()
@@ -224,7 +221,7 @@ func (p *v2Puller) pullV2Tag(out io.Writer, ref reference.Named) (tagUpdated boo
 		return false, err
 	}
 
-	out.Write(p.sf.FormatStatus(tagOrDigest, "Pulling from %s", p.repo.Name()))
+	p.config.ProgressChan <- xfer.Progress{ID: tagOrDigest, Message: "Pulling from " + p.repo.Name()}
 
 	var descriptors []xfer.DownloadDescriptor
 
@@ -262,23 +259,11 @@ func (p *v2Puller) pullV2Tag(out io.Writer, ref reference.Named) (tagUpdated boo
 		descriptors = append(descriptors, layerDescriptor)
 	}
 
-	download, progress := p.config.DownloadManager.Download(context.Background(), *rootFS, descriptors)
-	defer download.Release()
-
-	for prog := range progress {
-		if prog.Message != "" {
-			out.Write(p.sf.FormatProgress(prog.ID, prog.Message, nil))
-		} else {
-			jsonProgress := jsonmessage.JSONProgress{Current: prog.Current, Total: prog.Total}
-			fmtMessage := p.sf.FormatProgress(prog.ID, prog.Action, &jsonProgress)
-			out.Write(fmtMessage)
-		}
-	}
-
-	resultRootFS, err := download.Result()
+	resultRootFS, release, err := p.config.DownloadManager.Download(context.Background(), *rootFS, descriptors, p.config.ProgressChan)
 	if err != nil {
 		return false, err
 	}
+	defer release()
 
 	config, err := v1.MakeConfigFromV1Config([]byte(verifiedManifest.History[0].V1Compatibility), &resultRootFS, history)
 	if err != nil {
@@ -296,7 +281,7 @@ func (p *v2Puller) pullV2Tag(out io.Writer, ref reference.Named) (tagUpdated boo
 	}
 
 	if manifestDigest != "" {
-		out.Write(p.sf.FormatStatus("", "Digest: %s", manifestDigest))
+		p.config.ProgressChan <- xfer.Progress{Message: "Digest: " + manifestDigest.String()}
 	}
 
 	oldTagImageID, err := p.config.TagStore.Get(ref)

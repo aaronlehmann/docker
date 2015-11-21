@@ -16,8 +16,6 @@ import (
 	"github.com/docker/docker/image"
 	"github.com/docker/docker/image/v1"
 	"github.com/docker/docker/layer"
-	"github.com/docker/docker/pkg/jsonmessage"
-	"github.com/docker/docker/pkg/streamformatter"
 	"github.com/docker/docker/pkg/stringid"
 	"github.com/docker/docker/registry"
 	"golang.org/x/net/context"
@@ -27,7 +25,6 @@ type v1Puller struct {
 	v1IDService *metadata.V1IDService
 	endpoint    registry.APIEndpoint
 	config      *ImagePullConfig
-	sf          *streamformatter.StreamFormatter
 	repoInfo    *registry.RepositoryInfo
 	session     *registry.Session
 }
@@ -64,15 +61,13 @@ func (p *v1Puller) Pull(ref reference.Named) (fallback bool, err error) {
 		// TODO(dmcgowan): Check if should fallback
 		return false, err
 	}
-	out := p.config.OutStream
-	out.Write(p.sf.FormatStatus("", "%s: this image was pulled from a legacy registry.  Important: This registry version will not be supported in future versions of docker.", p.repoInfo.CanonicalName.Name()))
+	p.config.ProgressChan <- xfer.Progress{Message: p.repoInfo.CanonicalName.Name() + ": this image was pulled from a legacy registry.  Important: This registry version will not be supported in future versions of docker."}
 
 	return false, nil
 }
 
 func (p *v1Puller) pullRepository(ref reference.Named) error {
-	out := p.config.OutStream
-	out.Write(p.sf.FormatStatus("", "Pulling repository %s", p.repoInfo.CanonicalName.Name()))
+	p.config.ProgressChan <- xfer.Progress{Message: "Pulling repository " + p.repoInfo.CanonicalName.Name()}
 
 	repoData, err := p.session.GetRepositoryData(p.repoInfo.RemoteName)
 	if err != nil {
@@ -116,7 +111,7 @@ func (p *v1Puller) pullRepository(ref reference.Named) error {
 			continue
 		}
 
-		err := p.downloadImage(out, repoData, imgData, &layersDownloaded)
+		err := p.downloadImage(repoData, imgData, &layersDownloaded)
 		if err != nil {
 			return err
 		}
@@ -129,11 +124,11 @@ func (p *v1Puller) pullRepository(ref reference.Named) error {
 			localNameRef = p.repoInfo.LocalName
 		}
 	}
-	writeStatus(localNameRef.String(), out, p.sf, layersDownloaded)
+	writeStatus(localNameRef.String(), p.config.ProgressChan, layersDownloaded)
 	return nil
 }
 
-func (p *v1Puller) downloadImage(out io.Writer, repoData *registry.RepositoryData, img *registry.ImgData, layersDownloaded *bool) error {
+func (p *v1Puller) downloadImage(repoData *registry.RepositoryData, img *registry.ImgData, layersDownloaded *bool) error {
 	if img.Tag == "" {
 		logrus.Debugf("Image (id: %s) present in this repository but untagged, skipping", img.ID)
 		return nil
@@ -150,13 +145,13 @@ func (p *v1Puller) downloadImage(out io.Writer, repoData *registry.RepositoryDat
 		return err
 	}
 
-	out.Write(p.sf.FormatProgress(stringid.TruncateID(img.ID), fmt.Sprintf("Pulling image (%s) from %s", img.Tag, p.repoInfo.CanonicalName.Name()), nil))
+	p.config.ProgressChan <- xfer.Progress{ID: stringid.TruncateID(img.ID), Action: fmt.Sprintf("Pulling image (%s) from %s", img.Tag, p.repoInfo.CanonicalName.Name())}
 	success := false
 	var lastErr error
 	for _, ep := range p.repoInfo.Index.Mirrors {
 		ep += "v1/"
-		out.Write(p.sf.FormatProgress(stringid.TruncateID(img.ID), fmt.Sprintf("Pulling image (%s) from %s, mirror: %s", img.Tag, p.repoInfo.CanonicalName.Name(), ep), nil))
-		if err = p.pullImage(out, img.ID, ep, localNameRef, layersDownloaded); err != nil {
+		p.config.ProgressChan <- xfer.Progress{ID: stringid.TruncateID(img.ID), Action: fmt.Sprintf("Pulling image (%s) from %s, mirror: %s", img.Tag, p.repoInfo.CanonicalName.Name(), ep)}
+		if err = p.pullImage(img.ID, ep, localNameRef, layersDownloaded); err != nil {
 			// Don't report errors when pulling from mirrors.
 			logrus.Debugf("Error pulling image (%s) from %s, mirror: %s, %s", img.Tag, p.repoInfo.CanonicalName.Name(), ep, err)
 			continue
@@ -166,12 +161,12 @@ func (p *v1Puller) downloadImage(out io.Writer, repoData *registry.RepositoryDat
 	}
 	if !success {
 		for _, ep := range repoData.Endpoints {
-			out.Write(p.sf.FormatProgress(stringid.TruncateID(img.ID), fmt.Sprintf("Pulling image (%s) from %s, endpoint: %s", img.Tag, p.repoInfo.CanonicalName.Name(), ep), nil))
-			if err = p.pullImage(out, img.ID, ep, localNameRef, layersDownloaded); err != nil {
+			p.config.ProgressChan <- xfer.Progress{ID: stringid.TruncateID(img.ID), Action: fmt.Sprintf("Pulling image (%s) from %s, endpoint: %s", img.Tag, p.repoInfo.CanonicalName.Name(), ep)}
+			if err = p.pullImage(img.ID, ep, localNameRef, layersDownloaded); err != nil {
 				// It's not ideal that only the last error is returned, it would be better to concatenate the errors.
 				// As the error is also given to the output stream the user will see the error.
 				lastErr = err
-				out.Write(p.sf.FormatProgress(stringid.TruncateID(img.ID), fmt.Sprintf("Error pulling image (%s) from %s, endpoint: %s, %s", img.Tag, p.repoInfo.CanonicalName.Name(), ep, err), nil))
+				p.config.ProgressChan <- xfer.Progress{ID: stringid.TruncateID(img.ID), Action: fmt.Sprintf("Error pulling image (%s) from %s, endpoint: %s, %s", img.Tag, p.repoInfo.CanonicalName.Name(), ep, err)}
 				continue
 			}
 			success = true
@@ -180,14 +175,14 @@ func (p *v1Puller) downloadImage(out io.Writer, repoData *registry.RepositoryDat
 	}
 	if !success {
 		err := fmt.Errorf("Error pulling image (%s) from %s, %v", img.Tag, p.repoInfo.CanonicalName.Name(), lastErr)
-		out.Write(p.sf.FormatProgress(stringid.TruncateID(img.ID), err.Error(), nil))
+		p.config.ProgressChan <- xfer.Progress{ID: stringid.TruncateID(img.ID), Action: err.Error()}
 		return err
 	}
-	out.Write(p.sf.FormatProgress(stringid.TruncateID(img.ID), "Download complete", nil))
+	p.config.ProgressChan <- xfer.Progress{ID: stringid.TruncateID(img.ID), Action: "Download complete"}
 	return nil
 }
 
-func (p *v1Puller) pullImage(out io.Writer, v1ID, endpoint string, localNameRef reference.Named, layersDownloaded *bool) (err error) {
+func (p *v1Puller) pullImage(v1ID, endpoint string, localNameRef reference.Named, layersDownloaded *bool) (err error) {
 	var history []string
 	history, err = p.session.GetRemoteHistory(v1ID, endpoint)
 	if err != nil {
@@ -196,7 +191,7 @@ func (p *v1Puller) pullImage(out io.Writer, v1ID, endpoint string, localNameRef 
 	if len(history) < 1 {
 		return fmt.Errorf("empty history for image %s", v1ID)
 	}
-	out.Write(p.sf.FormatProgress(stringid.TruncateID(v1ID), "Pulling dependent layers", nil))
+	p.config.ProgressChan <- xfer.Progress{ID: stringid.TruncateID(v1ID), Action: "Pulling dependent layers"}
 
 	var (
 		descriptors []xfer.DownloadDescriptor
@@ -209,7 +204,7 @@ func (p *v1Puller) pullImage(out io.Writer, v1ID, endpoint string, localNameRef 
 	// config for all layers and create descriptors.
 	for i := len(history) - 1; i >= 0; i-- {
 		v1LayerID := history[i]
-		imgJSON, imgSize, err = p.downloadLayerConfig(out, v1LayerID, endpoint)
+		imgJSON, imgSize, err = p.downloadLayerConfig(v1LayerID, endpoint)
 		if err != nil {
 			return err
 		}
@@ -235,23 +230,11 @@ func (p *v1Puller) pullImage(out io.Writer, v1ID, endpoint string, localNameRef 
 	}
 
 	rootFS := image.NewRootFS()
-	download, progress := p.config.DownloadManager.Download(context.Background(), *rootFS, descriptors)
-	defer download.Release()
-
-	for prog := range progress {
-		if prog.Message != "" {
-			out.Write(p.sf.FormatProgress(prog.ID, prog.Message, nil))
-		} else {
-			jsonProgress := jsonmessage.JSONProgress{Current: prog.Current, Total: prog.Total}
-			fmtMessage := p.sf.FormatProgress(prog.ID, prog.Action, &jsonProgress)
-			out.Write(fmtMessage)
-		}
-	}
-
-	resultRootFS, err := download.Result()
+	resultRootFS, release, err := p.config.DownloadManager.Download(context.Background(), *rootFS, descriptors, p.config.ProgressChan)
 	if err != nil {
 		return err
 	}
+	defer release()
 
 	config, err := v1.MakeConfigFromV1Config(imgJSON, &resultRootFS, newHistory)
 	if err != nil {
@@ -270,14 +253,14 @@ func (p *v1Puller) pullImage(out io.Writer, v1ID, endpoint string, localNameRef 
 	return nil
 }
 
-func (p *v1Puller) downloadLayerConfig(out io.Writer, v1LayerID, endpoint string) (imgJSON []byte, imgSize int64, err error) {
-	out.Write(p.sf.FormatProgress(stringid.TruncateID(v1LayerID), "Pulling metadata", nil))
+func (p *v1Puller) downloadLayerConfig(v1LayerID, endpoint string) (imgJSON []byte, imgSize int64, err error) {
+	p.config.ProgressChan <- xfer.Progress{ID: stringid.TruncateID(v1LayerID), Action: "Pulling metadata"}
 
 	retries := 5
 	for j := 1; j <= retries; j++ {
 		imgJSON, imgSize, err := p.session.GetRemoteImageJSON(v1LayerID, endpoint)
 		if err != nil && j == retries {
-			out.Write(p.sf.FormatProgress(stringid.TruncateID(v1LayerID), "Error pulling layer metadata", nil))
+			p.config.ProgressChan <- xfer.Progress{ID: stringid.TruncateID(v1LayerID), Action: "Error pulling layer metadata"}
 			return nil, 0, err
 		} else if err != nil {
 			time.Sleep(time.Duration(j) * 500 * time.Millisecond)
@@ -314,10 +297,10 @@ func (ld *v1LayerDescriptor) DiffID() (layer.DiffID, error) {
 }
 
 func (ld *v1LayerDescriptor) Download(ctx context.Context, progressChan chan<- xfer.Progress) (io.ReadCloser, int64, error) {
-	progressChan <- xfer.Progress{ID: ld.ID(), Message: "Pulling fs layer"}
+	progressChan <- xfer.Progress{ID: ld.ID(), Action: "Pulling fs layer"}
 	layerReader, err := ld.session.GetRemoteImageLayer(ld.v1LayerID, ld.endpoint, ld.layerSize)
 	if err != nil {
-		progressChan <- xfer.Progress{ID: ld.ID(), Message: "Error pulling dependent layers"}
+		progressChan <- xfer.Progress{ID: ld.ID(), Action: "Error pulling dependent layers"}
 		return nil, 0, err
 	}
 	*ld.layersDownloaded = true
@@ -334,7 +317,7 @@ func (ld *v1LayerDescriptor) Download(ctx context.Context, progressChan chan<- x
 	reader := xfer.NewProgressReader(layerReader, progressChan, ld.layerSize, ld.ID(), "Downloading")
 	io.Copy(tmpFileWrapper.tmpFile, reader)
 
-	progressChan <- xfer.Progress{ID: ld.ID(), Message: "Download complete"}
+	progressChan <- xfer.Progress{ID: ld.ID(), Action: "Download complete"}
 
 	logrus.Debugf("Downloaded %s to tempfile %s", ld.ID(), tmpFileWrapper.tmpFile.Name())
 

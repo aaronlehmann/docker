@@ -42,43 +42,6 @@ func (d *downloadTransfer) result() (layer.Layer, error) {
 	return d.layer, d.err
 }
 
-// Download is an interface returned by the download manager to allow getting
-// the result of the nonblocking operation, and to release the resources
-// associated with it.
-type Download interface {
-	// Result returns the top layer for the image, if all layers were
-	// obtained successfully.
-	Result() (image.RootFS, error)
-	// Release frees the resources associated with the download.
-	Release()
-}
-
-type returnedDownload struct {
-	layerStore layer.Store
-	layer      layer.Layer
-	err        error
-
-	topDownload  *downloadTransfer
-	progressChan chan<- Progress // used by Release
-
-	rootFS image.RootFS
-}
-
-// Release frees the resources associated with the download.
-func (d *returnedDownload) Release() {
-	if d.topDownload != nil {
-		d.topDownload.Transfer.Release(d.progressChan)
-	} else if d.layer != nil {
-		layer.ReleaseAndLog(d.layerStore, d.layer)
-	}
-}
-
-// Result returns the top layer for the image, if all layers were obtained
-// successfully.
-func (d *returnedDownload) Result() (image.RootFS, error) {
-	return d.rootFS, d.err
-}
-
 // A DownloadDescriptor references a layer that may need to be downloaded.
 type DownloadDescriptor interface {
 	// Key returns the key used to deduplicate downloads.
@@ -103,118 +66,93 @@ type DownloadDescriptorWithRegistered interface {
 	Registered(diffID layer.DiffID)
 }
 
-// Download is a non-blocking function which ensures the requested layers
-// are present in the layer store. It uses the string returned by the
-// Key method to deduplicate downloads. If a given layer is not already
-// known to present in the layer store, and the key is not used by an
-// in-progress download, the Download method is called to get the layer
-// tar data. Layers are then registered in the appropriate order.
-// Once the Progress channel is closed, the caller may call the Result
-// method of the Download object. The caller must call the Release method
-// of the Download object once it is finished with the returned layer.
-// initialRootFS is generally an empty RootFS object, but may reference a base
-// layer if applicable.
-func (ldm *LayerDownloadManager) Download(ctx context.Context, initialRootFS image.RootFS, layers []DownloadDescriptor) (Download, <-chan Progress) {
-	// Include a buffer so that slow client connections don't affect
-	// transfer performance.
-	progressChan := make(chan Progress, 100)
-	returnedDownload := &returnedDownload{
-		layerStore: ldm.layerStore,
-	}
+// Download is a blocking function which ensures the requested layers are
+// present in the layer store. It uses the string returned by the Key method to
+// deduplicate downloads. If a given layer is not already known to present in
+// the layer store, and the key is not used by an in-progress download, the
+// Download method is called to get the layer tar data. Layers are then
+// registered in the appropriate order.  The caller must call the returned
+// release function once it is is done with the returned RootFS object.
+func (ldm *LayerDownloadManager) Download(ctx context.Context, initialRootFS image.RootFS, layers []DownloadDescriptor, progressChan chan<- Progress) (image.RootFS, func(), error) {
+	var (
+		topLayer     layer.Layer
+		topDownload  *downloadTransfer
+		missingLayer bool
+	)
 
-	go func() {
-		defer func() {
-			close(progressChan)
-		}()
+	transferKey := ""
+	for _, descriptor := range layers {
+		transferKey += descriptor.Key()
 
-		var (
-			topLayer     layer.Layer
-			topDownload  *downloadTransfer
-			missingLayer bool
-		)
-
-		transferKey := ""
-		for _, descriptor := range layers {
-			transferKey += descriptor.Key()
-
-			if !missingLayer {
-				missingLayer = true
-				diffID, err := descriptor.DiffID()
+		if !missingLayer {
+			missingLayer = true
+			diffID, err := descriptor.DiffID()
+			if err == nil {
+				initialRootFS.Append(diffID)
+				l, err := ldm.layerStore.Get(initialRootFS.ChainID())
 				if err == nil {
-					initialRootFS.Append(diffID)
-					l, err := ldm.layerStore.Get(initialRootFS.ChainID())
-					if err == nil {
-						// Layer already exists.
-						logrus.Debugf("Layer already exists: %s", descriptor.ID())
-						progressChan <- downloadMessage(descriptor, "Already exists")
-						if topLayer != nil {
-							layer.ReleaseAndLog(ldm.layerStore, topLayer)
-						}
-						topLayer = l
-						missingLayer = false
-						continue
+					// Layer already exists.
+					logrus.Debugf("Layer already exists: %s", descriptor.ID())
+					progressChan <- downloadMessage(descriptor, "Already exists")
+					if topLayer != nil {
+						layer.ReleaseAndLog(ldm.layerStore, topLayer)
 					}
+					topLayer = l
+					missingLayer = false
+					continue
 				}
 			}
-
-			// Layer is not known to exist - download and register it.
-			progressChan <- downloadMessage(descriptor, "Pulling fs layer")
-
-			var xferFunc DoFunc
-			if topDownload != nil {
-				xferFunc = ldm.makeDownloadFunc(descriptor, "", topDownload)
-				defer topDownload.Transfer.Release(progressChan)
-			} else if topLayer != nil {
-				xferFunc = ldm.makeDownloadFunc(descriptor, topLayer.ChainID(), nil)
-			} else {
-				xferFunc = ldm.makeDownloadFunc(descriptor, "", nil)
-			}
-			topDownload = ldm.tm.Transfer(transferKey, xferFunc, progressChan, topDownload).(*downloadTransfer)
 		}
 
-		if topDownload == nil {
-			returnedDownload.layer = topLayer
-			returnedDownload.rootFS = initialRootFS
-			return
+		// Layer is not known to exist - download and register it.
+		progressChan <- downloadMessage(descriptor, "Pulling fs layer")
+
+		var xferFunc DoFunc
+		if topDownload != nil {
+			xferFunc = ldm.makeDownloadFunc(descriptor, "", topDownload)
+			defer topDownload.Transfer.Release(progressChan)
+		} else if topLayer != nil {
+			xferFunc = ldm.makeDownloadFunc(descriptor, topLayer.ChainID(), nil)
+		} else {
+			xferFunc = ldm.makeDownloadFunc(descriptor, "", nil)
 		}
+		topDownload = ldm.tm.Transfer(transferKey, xferFunc, progressChan, topDownload).(*downloadTransfer)
+	}
 
-		// Won't be using the list built up so far - will generate it
-		// from downloaded layers instead.
-		initialRootFS.DiffIDs = []layer.DiffID{}
+	if topDownload == nil {
+		return initialRootFS, func() { layer.ReleaseAndLog(ldm.layerStore, topLayer) }, nil
+	}
 
-		defer func() {
-			if topLayer != nil {
-				layer.ReleaseAndLog(ldm.layerStore, topLayer)
-			}
-		}()
+	// Won't be using the list built up so far - will generate it
+	// from downloaded layers instead.
+	initialRootFS.DiffIDs = []layer.DiffID{}
 
-	selectLoop:
-		for {
-			select {
-			case <-ctx.Done():
-				returnedDownload.err = ctx.Err()
-				return
-			case <-topDownload.Done():
-				break selectLoop
-			}
+	defer func() {
+		if topLayer != nil {
+			layer.ReleaseAndLog(ldm.layerStore, topLayer)
 		}
-
-		l, err := topDownload.result()
-		returnedDownload.err = err
-
-		if err == nil {
-			for l != nil {
-				initialRootFS.DiffIDs = append([]layer.DiffID{l.DiffID()}, initialRootFS.DiffIDs...)
-				l = l.Parent()
-			}
-			returnedDownload.rootFS = initialRootFS
-		}
-
-		returnedDownload.topDownload = topDownload
-		returnedDownload.progressChan = progressChan
 	}()
 
-	return returnedDownload, progressChan
+selectLoop:
+	for {
+		select {
+		case <-ctx.Done():
+			return initialRootFS, func() {}, ctx.Err()
+		case <-topDownload.Done():
+			break selectLoop
+		}
+	}
+
+	l, err := topDownload.result()
+	if err != nil {
+		return initialRootFS, func() {}, err
+	}
+
+	for l != nil {
+		initialRootFS.DiffIDs = append([]layer.DiffID{l.DiffID()}, initialRootFS.DiffIDs...)
+		l = l.Parent()
+	}
+	return initialRootFS, func() { topDownload.Transfer.Release(progressChan) }, err
 }
 
 func (ldm *LayerDownloadManager) makeDownloadFunc(descriptor DownloadDescriptor, parentLayer layer.ChainID, parentDownload *downloadTransfer) DoFunc {
@@ -313,5 +251,5 @@ func (ldm *LayerDownloadManager) makeDownloadFunc(descriptor DownloadDescriptor,
 }
 
 func downloadMessage(descriptor DownloadDescriptor, message string) Progress {
-	return Progress{ID: descriptor.ID(), Message: message}
+	return Progress{ID: descriptor.ID(), Action: message}
 }
