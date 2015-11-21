@@ -27,23 +27,6 @@ type uploadTransfer struct {
 	err    error
 }
 
-// Upload is an interface returned by the upload manager to allow getting
-// the result of the nonblocking operation.
-type Upload interface {
-	Result() (map[layer.DiffID]digest.Digest, error)
-}
-
-type returnedUpload struct {
-	digests map[layer.DiffID]digest.Digest
-	err     error
-}
-
-// Result returns the top layer for the image, if all layers were obtained
-// successfully.
-func (d *returnedUpload) Result() (map[layer.DiffID]digest.Digest, error) {
-	return d.digests, d.err
-}
-
 // An UploadDescriptor references a layer that may need to be uploaded.
 type UploadDescriptor interface {
 	// Key returns the key used to deduplicate downloads.
@@ -56,57 +39,44 @@ type UploadDescriptor interface {
 	Upload(ctx context.Context, progressChan chan<- Progress) (digest.Digest, error)
 }
 
-// Upload is a non-blocking function which ensures the listed layers
-// are present on the remote registry. It uses the string returned by the Key
-// method to deduplicate uploads. Once the Progress channel is closed, the
-// caller may call the Result method of the Upload object.
-func (lum *LayerUploadManager) Upload(ctx context.Context, layers []UploadDescriptor) (Upload, <-chan Progress) {
-	// Include a buffer so that slow client connections don't affect
-	// transfer performance.
-	progressChan := make(chan Progress, 100)
-	returnedUpload := &returnedUpload{
-		digests: make(map[layer.DiffID]digest.Digest),
+// Upload is a blocking function which ensures the listed layers are present on
+// the remote registry. It uses the string returned by the Key method to
+// deduplicate uploads.
+func (lum *LayerUploadManager) Upload(ctx context.Context, layers []UploadDescriptor, progressChan chan<- Progress) (map[layer.DiffID]digest.Digest, error) {
+	var (
+		uploads          []*uploadTransfer
+		digests          = make(map[layer.DiffID]digest.Digest)
+		dedupDescriptors = make(map[string]struct{})
+	)
+
+	for _, descriptor := range layers {
+		progressChan <- uploadMessage(descriptor, "Preparing")
+
+		key := descriptor.Key()
+		if _, present := dedupDescriptors[key]; present {
+			continue
+		}
+		dedupDescriptors[key] = struct{}{}
+
+		xferFunc := lum.makeUploadFunc(descriptor)
+		upload := lum.tm.Transfer(descriptor.Key(), xferFunc, progressChan, nil).(*uploadTransfer)
+		defer upload.Transfer.Release(progressChan)
+		uploads = append(uploads, upload)
 	}
 
-	go func() {
-		defer func() {
-			close(progressChan)
-		}()
-
-		var uploads []*uploadTransfer
-		dedupDescriptors := make(map[string]struct{})
-
-		for _, descriptor := range layers {
-			progressChan <- uploadMessage(descriptor, "Preparing")
-
-			key := descriptor.Key()
-			if _, present := dedupDescriptors[key]; present {
-				continue
+	for _, upload := range uploads {
+		select {
+		case <-ctx.Done():
+			return nil, ctx.Err()
+		case <-upload.Transfer.Done():
+			if upload.err != nil {
+				return nil, upload.err
 			}
-			dedupDescriptors[key] = struct{}{}
-
-			xferFunc := lum.makeUploadFunc(descriptor)
-			upload := lum.tm.Transfer(descriptor.Key(), xferFunc, progressChan, nil).(*uploadTransfer)
-			defer upload.Transfer.Release(progressChan)
-			uploads = append(uploads, upload)
+			digests[upload.diffID] = upload.digest
 		}
+	}
 
-		for _, upload := range uploads {
-			select {
-			case <-ctx.Done():
-				returnedUpload.err = ctx.Err()
-				return
-			case <-upload.Transfer.Done():
-				if upload.err != nil {
-					returnedUpload.err = upload.err
-					return
-				}
-				returnedUpload.digests[upload.diffID] = upload.digest
-			}
-		}
-	}()
-
-	return returnedUpload, progressChan
+	return digests, nil
 }
 
 func (lum *LayerUploadManager) makeUploadFunc(descriptor UploadDescriptor) DoFunc {

@@ -15,7 +15,6 @@ import (
 	"github.com/docker/docker/distribution/xfer"
 	"github.com/docker/docker/image"
 	"github.com/docker/docker/layer"
-	"github.com/docker/docker/pkg/streamformatter"
 	"github.com/docker/docker/registry"
 	"github.com/docker/docker/tag"
 	"github.com/docker/libtrust"
@@ -29,9 +28,9 @@ type ImagePushConfig struct {
 	// AuthConfig holds authentication credentials for authenticating with
 	// the registry.
 	AuthConfig *cliconfig.AuthConfig
-	// OutStream is the output writer for showing the status of the push
+	// ProgressChan is the output for showing the status of the push
 	// operation.
-	OutStream io.Writer
+	ProgressChan chan<- xfer.Progress
 	// RegistryService is the registry service to use for TLS configuration
 	// and endpoint lookup.
 	RegistryService *registry.Service
@@ -69,7 +68,7 @@ const compressionBufSize = 32768
 // whether a v1 or v2 pusher will be created. The other parameters are passed
 // through to the underlying pusher implementation for use during the actual
 // push operation.
-func NewPusher(ref reference.Named, endpoint registry.APIEndpoint, repoInfo *registry.RepositoryInfo, imagePushConfig *ImagePushConfig, sf *streamformatter.StreamFormatter) (Pusher, error) {
+func NewPusher(ref reference.Named, endpoint registry.APIEndpoint, repoInfo *registry.RepositoryInfo, imagePushConfig *ImagePushConfig) (Pusher, error) {
 	switch endpoint.Version {
 	case registry.APIVersion2:
 		return &v2Pusher{
@@ -78,7 +77,6 @@ func NewPusher(ref reference.Named, endpoint registry.APIEndpoint, repoInfo *reg
 			endpoint:       endpoint,
 			repoInfo:       repoInfo,
 			config:         imagePushConfig,
-			sf:             sf,
 			layersPushed:   pushMap{layersPushed: make(map[digest.Digest]bool)},
 		}, nil
 	case registry.APIVersion1:
@@ -88,7 +86,6 @@ func NewPusher(ref reference.Named, endpoint registry.APIEndpoint, repoInfo *reg
 			endpoint:    endpoint,
 			repoInfo:    repoInfo,
 			config:      imagePushConfig,
-			sf:          sf,
 		}, nil
 	}
 	return nil, fmt.Errorf("unknown version %d for registry %s", endpoint.Version, endpoint.URL)
@@ -99,8 +96,6 @@ func NewPusher(ref reference.Named, endpoint registry.APIEndpoint, repoInfo *reg
 // If no tag is provided, all tags will be pushed.
 func Push(ref reference.Named, imagePushConfig *ImagePushConfig) error {
 	// FIXME: Allow to interrupt current push when new push of same image is done.
-
-	var sf = streamformatter.NewJSONStreamFormatter()
 
 	// Resolve the Repository name from fqn to RepositoryInfo
 	repoInfo, err := imagePushConfig.RegistryService.ResolveRepository(ref)
@@ -113,7 +108,7 @@ func Push(ref reference.Named, imagePushConfig *ImagePushConfig) error {
 		return err
 	}
 
-	imagePushConfig.OutStream.Write(sf.FormatStatus("", "The push refers to a repository [%s]", repoInfo.CanonicalName))
+	imagePushConfig.ProgressChan <- xfer.Progress{Message: fmt.Sprintf("The push refers to a repository [%s]", repoInfo.CanonicalName.String())}
 
 	associations := imagePushConfig.TagStore.ReferencesByName(repoInfo.LocalName)
 	if len(associations) == 0 {
@@ -124,7 +119,7 @@ func Push(ref reference.Named, imagePushConfig *ImagePushConfig) error {
 	for _, endpoint := range endpoints {
 		logrus.Debugf("Trying to push %s to %s %s", repoInfo.CanonicalName, endpoint.URL, endpoint.Version)
 
-		pusher, err := NewPusher(ref, endpoint, repoInfo, imagePushConfig, sf)
+		pusher, err := NewPusher(ref, endpoint, repoInfo, imagePushConfig)
 		if err != nil {
 			lastErr = err
 			continue

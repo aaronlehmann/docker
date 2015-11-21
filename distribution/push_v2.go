@@ -20,8 +20,6 @@ import (
 	"github.com/docker/docker/image"
 	"github.com/docker/docker/image/v1"
 	"github.com/docker/docker/layer"
-	"github.com/docker/docker/pkg/jsonmessage"
-	"github.com/docker/docker/pkg/streamformatter"
 	"github.com/docker/docker/pkg/stringid"
 	"github.com/docker/docker/registry"
 	"github.com/docker/docker/tag"
@@ -34,7 +32,6 @@ type v2Pusher struct {
 	endpoint       registry.APIEndpoint
 	repoInfo       *registry.RepositoryInfo
 	config         *ImagePushConfig
-	sf             *streamformatter.StreamFormatter
 	repo           distribution.Repository
 
 	// layersPushed is the set of layers known to exist on the remote side.
@@ -99,8 +96,6 @@ func (p *v2Pusher) pushV2Tag(association tag.Association) error {
 		return fmt.Errorf("could not find image from tag %s: %v", ref.String(), err)
 	}
 
-	out := p.config.OutStream
-
 	var l layer.Layer
 
 	topLayerID := img.RootFS.ChainID()
@@ -144,19 +139,7 @@ func (p *v2Pusher) pushV2Tag(association tag.Association) error {
 		l = l.Parent()
 	}
 
-	upload, progress := p.config.UploadManager.Upload(context.Background(), descriptors)
-
-	for prog := range progress {
-		if prog.Message != "" {
-			out.Write(p.sf.FormatProgress(prog.ID, prog.Message, nil))
-		} else {
-			jsonProgress := jsonmessage.JSONProgress{Current: prog.Current, Total: prog.Total}
-			fmtMessage := p.sf.FormatProgress(prog.ID, prog.Action, &jsonProgress)
-			out.Write(fmtMessage)
-		}
-	}
-
-	fsLayers, err := upload.Result()
+	fsLayers, err := p.config.UploadManager.Upload(context.Background(), descriptors, p.config.ProgressChan)
 	if err != nil {
 		return err
 	}
@@ -184,7 +167,7 @@ func (p *v2Pusher) pushV2Tag(association tag.Association) error {
 		if tagged, isTagged := ref.(reference.Tagged); isTagged {
 			// NOTE: do not change this format without first changing the trust client
 			// code. This information is used to determine what was pushed and should be signed.
-			out.Write(p.sf.FormatStatus("", "%s: digest: %s size: %d", tagged.Tag(), manifestDigest, manifestSize))
+			p.config.ProgressChan <- xfer.Progress{Message: fmt.Sprintf("%s: digest: %s size: %d", tagged.Tag(), manifestDigest, manifestSize)}
 		}
 	}
 
@@ -224,11 +207,11 @@ func (pd *v2PushDescriptor) Upload(ctx context.Context, progressChan chan<- xfer
 	if err == nil {
 		dgst, exists, err := blobSumAlreadyExists(possibleBlobsums, pd.repo, pd.layersPushed)
 		if err != nil {
-			progressChan <- xfer.Progress{ID: pd.ID(), Message: "Image push failed"}
+			progressChan <- xfer.Progress{ID: pd.ID(), Action: "Image push failed"}
 			return "", err
 		}
 		if exists {
-			progressChan <- xfer.Progress{ID: pd.ID(), Message: "Layer already exists"}
+			progressChan <- xfer.Progress{ID: pd.ID(), Action: "Layer already exists"}
 			return dgst, nil
 		}
 	}
@@ -258,7 +241,6 @@ func (pd *v2PushDescriptor) Upload(ctx context.Context, progressChan chan<- xfer
 	digester := digest.Canonical.New()
 	tee := io.TeeReader(compressedReader, digester.Hash())
 
-	progressChan <- xfer.Progress{ID: pd.ID(), Message: "Pushing"}
 	nn, err := layerUpload.ReadFrom(tee)
 	compressedReader.Close()
 	if err != nil {
@@ -271,7 +253,7 @@ func (pd *v2PushDescriptor) Upload(ctx context.Context, progressChan chan<- xfer
 	}
 
 	logrus.Debugf("uploaded layer %s (%s), %d bytes", diffID, pushDigest, nn)
-	progressChan <- xfer.Progress{ID: pd.ID(), Message: "Pushed"}
+	progressChan <- xfer.Progress{ID: pd.ID(), Action: "Pushed"}
 
 	// Cache mapping from this layer's DiffID to the blobsum
 	if err := pd.blobSumService.Add(diffID, pushDigest); err != nil {

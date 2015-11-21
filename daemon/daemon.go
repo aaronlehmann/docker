@@ -1099,10 +1099,21 @@ func (daemon *Daemon) ExportImage(names []string, outStream io.Writer) error {
 
 // PushImage initiates a push operation on the repository named localName.
 func (daemon *Daemon) PushImage(ref reference.Named, metaHeaders map[string][]string, authConfig *cliconfig.AuthConfig, outStream io.Writer) error {
+	// Include a buffer so that slow client connections don't affect
+	// transfer performance.
+	progressChan := make(chan xfer.Progress, 100)
+
+	writesDone := make(chan struct{})
+
+	go func() {
+		writeDistributionProgress(outStream, progressChan)
+		close(writesDone)
+	}()
+
 	imagePushConfig := &distribution.ImagePushConfig{
 		MetaHeaders:     metaHeaders,
 		AuthConfig:      authConfig,
-		OutStream:       outStream,
+		ProgressChan:    progressChan,
 		RegistryService: daemon.RegistryService,
 		EventsService:   daemon.EventsService,
 		MetadataStore:   daemon.distributionMetadataStore,
@@ -1113,7 +1124,10 @@ func (daemon *Daemon) PushImage(ref reference.Named, metaHeaders map[string][]st
 		UploadManager:   daemon.uploadManager,
 	}
 
-	return distribution.Push(ref, imagePushConfig)
+	err := distribution.Push(ref, imagePushConfig)
+	close(progressChan)
+	<-writesDone
+	return err
 }
 
 // LookupImage looks up an image by name and returns it as an ImageInspect
