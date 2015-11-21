@@ -177,24 +177,15 @@ func validateRepoName(name string) error {
 	return nil
 }
 
-type tmpFileWrapper struct {
-	tmpFile      *os.File
-	didFirstRead bool
-}
+// tmpFileClose creates a closer function for a temporary file that closes the file
+// and also deletes it.
+func tmpFileCloser(tmpFile *os.File) func() error {
+	return func() error {
+		tmpFile.Close()
+		if err := os.RemoveAll(tmpFile.Name()); err != nil {
+			logrus.Errorf("Failed to remove temp file: %s", tmpFile.Name())
+		}
 
-func (w *tmpFileWrapper) Read(p []byte) (int, error) {
-	if !w.didFirstRead {
-		w.tmpFile.Seek(0, 0)
-		w.didFirstRead = true
+		return nil
 	}
-	return w.tmpFile.Read(p)
-}
-
-func (w *tmpFileWrapper) Close() error {
-	w.tmpFile.Close()
-	if err := os.RemoveAll(w.tmpFile.Name()); err != nil {
-		logrus.Errorf("Failed to remove temp file: %s", w.tmpFile.Name())
-	}
-
-	return nil
 }

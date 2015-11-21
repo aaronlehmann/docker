@@ -16,6 +16,7 @@ import (
 	"github.com/docker/docker/image"
 	"github.com/docker/docker/image/v1"
 	"github.com/docker/docker/layer"
+	"github.com/docker/docker/pkg/ioutils"
 	"github.com/docker/docker/pkg/stringid"
 	"github.com/docker/docker/registry"
 	"golang.org/x/net/context"
@@ -307,21 +308,20 @@ func (ld *v1LayerDescriptor) Download(ctx context.Context, progressChan chan<- x
 
 	defer layerReader.Close()
 
-	tmpFileWrapper := &tmpFileWrapper{}
-
-	tmpFileWrapper.tmpFile, err = ioutil.TempFile("", "GetImageBlob")
+	tmpFile, err := ioutil.TempFile("", "GetImageBlob")
 	if err != nil {
 		return nil, 0, err
 	}
 
 	reader := xfer.NewProgressReader(layerReader, progressChan, ld.layerSize, ld.ID(), "Downloading")
-	io.Copy(tmpFileWrapper.tmpFile, reader)
+	io.Copy(tmpFile, reader)
 
 	progressChan <- xfer.Progress{ID: ld.ID(), Action: "Download complete"}
 
-	logrus.Debugf("Downloaded %s to tempfile %s", ld.ID(), tmpFileWrapper.tmpFile.Name())
+	logrus.Debugf("Downloaded %s to tempfile %s", ld.ID(), tmpFile.Name())
 
-	return tmpFileWrapper, ld.layerSize, nil
+	tmpFile.Seek(0, 0)
+	return ioutils.NewReadCloserWrapper(tmpFile, tmpFileCloser(tmpFile)), ld.layerSize, nil
 }
 
 func (ld *v1LayerDescriptor) Registered(diffID layer.DiffID) {
