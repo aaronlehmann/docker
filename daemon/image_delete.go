@@ -236,12 +236,6 @@ func (daemon *Daemon) imageDeleteHelper(imgID image.ID, records *[]types.ImageDe
 		return conflict
 	}
 
-	parent, err := daemon.imageStore.GetParent(imgID)
-	if err != nil {
-		// There may be no parent
-		parent = ""
-	}
-
 	// Delete all repository tag/digest references to this image.
 	if err := daemon.removeAllReferencesToImageID(imgID, records); err != nil {
 		return err
@@ -256,6 +250,12 @@ func (daemon *Daemon) imageDeleteHelper(imgID image.ID, records *[]types.ImageDe
 	*records = append(*records, types.ImageDelete{Deleted: imgID.String()})
 	for _, removedLayer := range removedLayers {
 		*records = append(*records, types.ImageDelete{Deleted: removedLayer.ChainID.String()})
+	}
+
+	parent, err := daemon.imageStore.GetParent(imgID)
+	if err != nil {
+		// There may be no parent
+		return nil
 	}
 
 	if !prune || parent == "" {
