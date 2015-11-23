@@ -1,10 +1,15 @@
 package xfer
 
 import (
+	"fmt"
+	"time"
+
 	"github.com/docker/distribution/digest"
 	"github.com/docker/docker/layer"
 	"golang.org/x/net/context"
 )
+
+const maxUploadAttempts = 5
 
 // LayerUploadManager provides task management and progress reporting for
 // uploads.
@@ -98,13 +103,30 @@ func (lum *LayerUploadManager) makeUploadFunc(descriptor UploadDescriptor) DoFun
 				<-start
 			}
 
-			digest, err := descriptor.Upload(u.Transfer.Context(), progressChan)
-			if err != nil {
-				u.err = err
-				return
+			retries := 0
+			for {
+				digest, err := descriptor.Upload(u.Transfer.Context(), progressChan)
+				if err == nil {
+					u.digest = digest
+					break
+				}
+				retries++
+				if _, isDNR := err.(DoNotRetry); isDNR || retries == maxUploadAttempts {
+					u.err = err
+					return
+				}
+				delay := retries * 5
+				ticker := time.NewTicker(time.Second)
+				for {
+					progressChan <- uploadMessage(descriptor, fmt.Sprintf("Retrying in %d seconds", delay))
+					delay--
+					if delay == 0 {
+						ticker.Stop()
+						break
+					}
+					<-ticker.C
+				}
 			}
-
-			u.digest = digest
 		}()
 
 		return u

@@ -222,7 +222,7 @@ func (pd *v2PushDescriptor) Upload(ctx context.Context, progressChan chan<- xfer
 
 	arch, err := pd.layer.TarStream()
 	if err != nil {
-		return "", err
+		return "", xfer.DoNotRetry{err}
 	}
 
 	// Send the layer
