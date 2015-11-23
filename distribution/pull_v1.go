@@ -5,6 +5,8 @@ import (
 	"fmt"
 	"io"
 	"io/ioutil"
+	"net"
+	"net/url"
 	"strings"
 	"time"
 
@@ -302,7 +304,14 @@ func (ld *v1LayerDescriptor) Download(ctx context.Context, progressChan chan<- x
 	layerReader, err := ld.session.GetRemoteImageLayer(ld.v1LayerID, ld.endpoint, ld.layerSize)
 	if err != nil {
 		progressChan <- xfer.Progress{ID: ld.ID(), Action: "Error pulling dependent layers"}
-		return nil, 0, err
+		if uerr, ok := err.(*url.Error); ok {
+			err = uerr.Err
+		}
+		if terr, ok := err.(net.Error); ok && terr.Timeout() {
+			return nil, 0, err
+		} else {
+			return nil, 0, xfer.DoNotRetry{err}
+		}
 	}
 	*ld.layersDownloaded = true
 

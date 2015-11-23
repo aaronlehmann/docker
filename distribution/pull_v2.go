@@ -130,6 +130,9 @@ func (ld *v2LayerDescriptor) Download(ctx context.Context, progressChan chan<- x
 	desc, err := blobs.Stat(ctx, ld.digest)
 	if err != nil {
 		logrus.Debugf("Error statting layer: %v", err)
+		if err == distribution.ErrBlobUnknown {
+			return nil, 0, xfer.DoNotRetry{err}
+		}
 		return nil, 0, err
 	}
 

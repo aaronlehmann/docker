@@ -6,6 +6,17 @@ import (
 	"golang.org/x/net/context"
 )
 
+// DoNotRetry is an error wrapper indicating that the error cannot be resolved
+// with a retry.
+type DoNotRetry struct {
+	Err error
+}
+
+// Error returns the stringified representation of the encapsulated error.
+func (e DoNotRetry) Error() string {
+	return e.Err.Error()
+}
+
 // Transfer represents an in-progress transfer.
 type Transfer interface {
 	Watch(progressChan chan<- Progress)

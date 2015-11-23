@@ -4,6 +4,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"time"
 
 	"github.com/Sirupsen/logrus"
 	"github.com/docker/docker/image"
@@ -11,6 +12,8 @@ import (
 	"github.com/docker/docker/pkg/archive"
 	"golang.org/x/net/context"
 )
+
+const maxDownloadAttempts = 5
 
 // LayerDownloadManager figures out which layers need to be downloaded, then
 // registers and downloads those, taking into account dependencies between
@@ -174,10 +177,49 @@ func (ldm *LayerDownloadManager) makeDownloadFunc(descriptor DownloadDescriptor,
 				<-start
 			}
 
-			downloadReader, size, err := descriptor.Download(d.Transfer.Context(), progressChan)
-			if err != nil {
-				d.err = err
-				return
+			if parentDownload != nil {
+				// Did the parent download already fail or get
+				// cancelled?
+				select {
+				case <-parentDownload.Done():
+					_, err := parentDownload.result()
+					if err != nil {
+						d.err = err
+						return
+					}
+				default:
+				}
+			}
+
+			var (
+				downloadReader io.ReadCloser
+				size           int64
+				err            error
+				retries        int
+			)
+
+			for {
+				downloadReader, size, err = descriptor.Download(d.Transfer.Context(), progressChan)
+				if err == nil {
+					break
+				}
+				retries++
+				if _, isDNR := err.(DoNotRetry); isDNR || retries == maxDownloadAttempts {
+					d.err = err
+					return
+				}
+
+				delay := retries * 5
+				ticker := time.NewTicker(time.Second)
+				for {
+					progressChan <- downloadMessage(descriptor, fmt.Sprintf("Retrying in %d seconds", delay))
+					delay--
+					if delay == 0 {
+						ticker.Stop()
+						break
+					}
+					<-ticker.C
+				}
 			}
 
 			defer downloadReader.Close()
