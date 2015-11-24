@@ -67,6 +67,7 @@ import (
 	lntypes "github.com/docker/libnetwork/types"
 	"github.com/docker/libtrust"
 	"github.com/opencontainers/runc/libcontainer"
+	"golang.org/x/net/context"
 )
 
 var (
@@ -1043,14 +1044,20 @@ func (daemon *Daemon) TagImage(newTag reference.Named, imageName string, force b
 	return daemon.tagStore.Add(newTag, imageID, force)
 }
 
-func writeDistributionProgress(outStream io.Writer, progressChan <-chan xfer.Progress) {
+func writeDistributionProgress(cancelFunc func(), outStream io.Writer, progressChan <-chan xfer.Progress) {
 	sf := streamformatter.NewJSONStreamFormatter()
 	for prog := range progressChan {
 		if prog.Message != "" {
-			outStream.Write(sf.FormatStatus(prog.ID, prog.Message))
+			formatted := sf.FormatStatus(prog.ID, prog.Message)
+			if _, err := outStream.Write(formatted); err != nil {
+				cancelFunc()
+			}
 		} else {
 			jsonProgress := jsonmessage.JSONProgress{Current: prog.Current, Total: prog.Total}
-			outStream.Write(sf.FormatProgress(prog.ID, prog.Action, &jsonProgress))
+			formatted := sf.FormatProgress(prog.ID, prog.Action, &jsonProgress)
+			if _, err := outStream.Write(formatted); err != nil {
+				cancelFunc()
+			}
 		}
 	}
 }
@@ -1064,8 +1071,10 @@ func (daemon *Daemon) PullImage(ref reference.Named, metaHeaders map[string][]st
 
 	writesDone := make(chan struct{})
 
+	ctx, cancelFunc := context.WithCancel(context.Background())
+
 	go func() {
-		writeDistributionProgress(outStream, progressChan)
+		writeDistributionProgress(cancelFunc, outStream, progressChan)
 		close(writesDone)
 	}()
 
@@ -1081,7 +1090,7 @@ func (daemon *Daemon) PullImage(ref reference.Named, metaHeaders map[string][]st
 		DownloadManager: daemon.downloadManager,
 	}
 
-	err := distribution.Pull(ref, imagePullConfig)
+	err := distribution.Pull(ctx, ref, imagePullConfig)
 	close(progressChan)
 	<-writesDone
 	return err
@@ -1105,8 +1114,10 @@ func (daemon *Daemon) PushImage(ref reference.Named, metaHeaders map[string][]st
 
 	writesDone := make(chan struct{})
 
+	ctx, cancelFunc := context.WithCancel(context.Background())
+
 	go func() {
-		writeDistributionProgress(outStream, progressChan)
+		writeDistributionProgress(cancelFunc, outStream, progressChan)
 		close(writesDone)
 	}()
 
@@ -1124,7 +1135,7 @@ func (daemon *Daemon) PushImage(ref reference.Named, metaHeaders map[string][]st
 		UploadManager:   daemon.uploadManager,
 	}
 
-	err := distribution.Push(ref, imagePushConfig)
+	err := distribution.Push(ctx, ref, imagePushConfig)
 	close(progressChan)
 	<-writesDone
 	return err

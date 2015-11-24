@@ -140,6 +140,7 @@ selectLoop:
 	for {
 		select {
 		case <-ctx.Done():
+			topDownload.Transfer.Release(progressChan)
 			return initialRootFS, func() {}, ctx.Err()
 		case <-topDownload.Done():
 			break selectLoop
@@ -148,6 +149,7 @@ selectLoop:
 
 	l, err := topDownload.result()
 	if err != nil {
+		topDownload.Transfer.Release(progressChan)
 		return initialRootFS, func() {}, err
 	}
 

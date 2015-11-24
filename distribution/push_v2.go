@@ -27,6 +27,7 @@ import (
 )
 
 type v2Pusher struct {
+	ctx            context.Context
 	blobSumService *metadata.BlobSumService
 	ref            reference.Named
 	endpoint       registry.APIEndpoint
@@ -139,7 +140,7 @@ func (p *v2Pusher) pushV2Tag(association tag.Association) error {
 		l = l.Parent()
 	}
 
-	fsLayers, err := p.config.UploadManager.Upload(context.Background(), descriptors, p.config.ProgressChan)
+	fsLayers, err := p.config.UploadManager.Upload(p.ctx, descriptors, p.config.ProgressChan)
 	if err != nil {
 		return err
 	}
@@ -171,7 +172,7 @@ func (p *v2Pusher) pushV2Tag(association tag.Association) error {
 		}
 	}
 
-	manSvc, err := p.repo.Manifests(context.Background())
+	manSvc, err := p.repo.Manifests(p.ctx)
 	if err != nil {
 		return err
 	}
@@ -205,7 +206,7 @@ func (pd *v2PushDescriptor) Upload(ctx context.Context, progressChan chan<- xfer
 	// Do we have any blobsums associated with this layer's DiffID?
 	possibleBlobsums, err := pd.blobSumService.GetBlobSums(diffID)
 	if err == nil {
-		dgst, exists, err := blobSumAlreadyExists(possibleBlobsums, pd.repo, pd.layersPushed)
+		dgst, exists, err := blobSumAlreadyExists(ctx, possibleBlobsums, pd.repo, pd.layersPushed)
 		if err != nil {
 			progressChan <- xfer.Progress{ID: pd.ID(), Action: "Image push failed"}
 			return "", err
@@ -234,6 +235,11 @@ func (pd *v2PushDescriptor) Upload(ctx context.Context, progressChan chan<- xfer
 
 	// don't care if this fails; best effort
 	size, _ := pd.layer.DiffSize()
+
+	// FIXME: Interrupt the upload if ctx is cancelled. This is a bit
+	// tricky because TarStream probably needs to be modified to return
+	// an io.ReadCloser. Currently, the whole stream needs to be consumed
+	// to free up the associated resources.
 
 	reader := xfer.NewProgressReader(ioutil.NopCloser(arch), progressChan, size, pd.ID(), "Pushing")
 	compressedReader := compress(reader)
@@ -270,7 +276,7 @@ func (pd *v2PushDescriptor) Upload(ctx context.Context, progressChan chan<- xfer
 // blobSumAlreadyExists checks if the registry already know about any of the
 // blobsums passed in the "blobsums" slice. If it finds one that the registry
 // knows about, it returns the known digest and "true".
-func blobSumAlreadyExists(blobsums []digest.Digest, repo distribution.Repository, layersPushed *pushMap) (digest.Digest, bool, error) {
+func blobSumAlreadyExists(ctx context.Context, blobsums []digest.Digest, repo distribution.Repository, layersPushed *pushMap) (digest.Digest, bool, error) {
 	layersPushed.Lock()
 	for _, dgst := range blobsums {
 		if layersPushed.layersPushed[dgst] {
@@ -283,7 +289,7 @@ func blobSumAlreadyExists(blobsums []digest.Digest, repo distribution.Repository
 	layersPushed.Unlock()
 
 	for _, dgst := range blobsums {
-		_, err := repo.Blobs(context.Background()).Stat(context.Background(), dgst)
+		_, err := repo.Blobs(ctx).Stat(ctx, dgst)
 		switch err {
 		case nil:
 			return dgst, true, nil
