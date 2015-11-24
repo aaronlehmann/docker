@@ -14,6 +14,7 @@ import (
 	"github.com/docker/docker/image"
 	"github.com/docker/docker/registry"
 	"github.com/docker/docker/tag"
+	"golang.org/x/net/context"
 )
 
 // ImagePullConfig stores pull configuration.
@@ -56,10 +57,11 @@ type Puller interface {
 // whether a v1 or v2 puller will be created. The other parameters are passed
 // through to the underlying puller implementation for use during the actual
 // pull operation.
-func newPuller(endpoint registry.APIEndpoint, repoInfo *registry.RepositoryInfo, imagePullConfig *ImagePullConfig) (Puller, error) {
+func newPuller(ctx context.Context, endpoint registry.APIEndpoint, repoInfo *registry.RepositoryInfo, imagePullConfig *ImagePullConfig) (Puller, error) {
 	switch endpoint.Version {
 	case registry.APIVersion2:
 		return &v2Puller{
+			ctx:            ctx,
 			blobSumService: metadata.NewBlobSumService(imagePullConfig.MetadataStore),
 			endpoint:       endpoint,
 			config:         imagePullConfig,
@@ -67,6 +69,7 @@ func newPuller(endpoint registry.APIEndpoint, repoInfo *registry.RepositoryInfo,
 		}, nil
 	case registry.APIVersion1:
 		return &v1Puller{
+			ctx:         ctx,
 			v1IDService: metadata.NewV1IDService(imagePullConfig.MetadataStore),
 			endpoint:    endpoint,
 			config:      imagePullConfig,
@@ -78,7 +81,7 @@ func newPuller(endpoint registry.APIEndpoint, repoInfo *registry.RepositoryInfo,
 
 // Pull initiates a pull operation. image is the repository name to pull, and
 // tag may be either empty, or indicate a specific tag to pull.
-func Pull(ref reference.Named, imagePullConfig *ImagePullConfig) error {
+func Pull(ctx context.Context, ref reference.Named, imagePullConfig *ImagePullConfig) error {
 	// Resolve the Repository name from fqn to RepositoryInfo
 	repoInfo, err := imagePullConfig.RegistryService.ResolveRepository(ref)
 	if err != nil {
@@ -113,12 +116,19 @@ func Pull(ref reference.Named, imagePullConfig *ImagePullConfig) error {
 	for _, endpoint := range endpoints {
 		logrus.Debugf("Trying to pull %s from %s %s", repoInfo.LocalName, endpoint.URL, endpoint.Version)
 
-		puller, err := newPuller(endpoint, repoInfo, imagePullConfig)
+		puller, err := newPuller(ctx, endpoint, repoInfo, imagePullConfig)
 		if err != nil {
 			errors = append(errors, err.Error())
 			continue
 		}
 		if fallback, err := puller.Pull(ref); err != nil {
+			// Was this pull cancelled? If so, don't try to fall
+			// back.
+			select {
+			case <-ctx.Done():
+				fallback = false
+			default:
+			}
 			if fallback {
 				if _, ok := err.(registry.ErrNoSupport); !ok {
 					// Because we found an error that's not ErrNoSupport, discard all subsequent ErrNoSupport errors.

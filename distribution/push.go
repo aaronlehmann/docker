@@ -18,6 +18,7 @@ import (
 	"github.com/docker/docker/registry"
 	"github.com/docker/docker/tag"
 	"github.com/docker/libtrust"
+	"golang.org/x/net/context"
 )
 
 // ImagePushConfig stores push configuration.
@@ -68,10 +69,11 @@ const compressionBufSize = 32768
 // whether a v1 or v2 pusher will be created. The other parameters are passed
 // through to the underlying pusher implementation for use during the actual
 // push operation.
-func NewPusher(ref reference.Named, endpoint registry.APIEndpoint, repoInfo *registry.RepositoryInfo, imagePushConfig *ImagePushConfig) (Pusher, error) {
+func NewPusher(ctx context.Context, ref reference.Named, endpoint registry.APIEndpoint, repoInfo *registry.RepositoryInfo, imagePushConfig *ImagePushConfig) (Pusher, error) {
 	switch endpoint.Version {
 	case registry.APIVersion2:
 		return &v2Pusher{
+			ctx:            ctx,
 			blobSumService: metadata.NewBlobSumService(imagePushConfig.MetadataStore),
 			ref:            ref,
 			endpoint:       endpoint,
@@ -94,7 +96,7 @@ func NewPusher(ref reference.Named, endpoint registry.APIEndpoint, repoInfo *reg
 // Push initiates a push operation on the repository named localName.
 // ref is the specific variant of the image to be pushed.
 // If no tag is provided, all tags will be pushed.
-func Push(ref reference.Named, imagePushConfig *ImagePushConfig) error {
+func Push(ctx context.Context, ref reference.Named, imagePushConfig *ImagePushConfig) error {
 	// FIXME: Allow to interrupt current push when new push of same image is done.
 
 	// Resolve the Repository name from fqn to RepositoryInfo
@@ -119,12 +121,20 @@ func Push(ref reference.Named, imagePushConfig *ImagePushConfig) error {
 	for _, endpoint := range endpoints {
 		logrus.Debugf("Trying to push %s to %s %s", repoInfo.CanonicalName, endpoint.URL, endpoint.Version)
 
-		pusher, err := NewPusher(ref, endpoint, repoInfo, imagePushConfig)
+		pusher, err := NewPusher(ctx, ref, endpoint, repoInfo, imagePushConfig)
 		if err != nil {
 			lastErr = err
 			continue
 		}
 		if fallback, err := pusher.Push(); err != nil {
+			// Was this push cancelled? If so, don't try to fall
+			// back.
+			select {
+			case <-ctx.Done():
+				fallback = false
+			default:
+			}
+
 			if fallback {
 				lastErr = err
 				continue

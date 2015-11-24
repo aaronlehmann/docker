@@ -26,6 +26,7 @@ import (
 )
 
 type v2Puller struct {
+	ctx            context.Context
 	blobSumService *metadata.BlobSumService
 	endpoint       registry.APIEndpoint
 	config         *ImagePullConfig
@@ -67,7 +68,7 @@ func (p *v2Puller) pullV2Repository(ref reference.Named) (err error) {
 		}
 		refs = []reference.Named{taggedName}
 	} else {
-		manSvc, err := p.repo.Manifests(context.Background())
+		manSvc, err := p.repo.Manifests(p.ctx)
 		if err != nil {
 			return err
 		}
@@ -154,7 +155,24 @@ func (ld *v2LayerDescriptor) Download(ctx context.Context, progressChan chan<- x
 	}
 
 	reader := xfer.NewProgressReader(ioutil.NopCloser(io.TeeReader(layerDownload, verifier)), progressChan, desc.Size, ld.ID(), "Downloading")
+
+	transferDone := make(chan struct{})
+	go func() {
+		select {
+		case <-ctx.Done():
+			layerDownload.Close()
+		case <-transferDone:
+			return
+		}
+	}()
 	io.Copy(tmpFile, reader)
+	close(transferDone)
+
+	select {
+	case <-ctx.Done():
+		return nil, 0, xfer.DoNotRetry{ctx.Err()}
+	default:
+	}
 
 	progressChan <- xfer.Progress{ID: ld.ID(), Action: "Verifying Checksum"}
 
@@ -194,7 +212,7 @@ func (p *v2Puller) pullV2Tag(ref reference.Named) (tagUpdated bool, err error) {
 
 	logrus.Debugf("Pulling ref from V2 registry: %q", tagOrDigest)
 
-	manSvc, err := p.repo.Manifests(context.Background())
+	manSvc, err := p.repo.Manifests(p.ctx)
 	if err != nil {
 		return false, err
 	}
@@ -262,7 +280,7 @@ func (p *v2Puller) pullV2Tag(ref reference.Named) (tagUpdated bool, err error) {
 		descriptors = append(descriptors, layerDescriptor)
 	}
 
-	resultRootFS, release, err := p.config.DownloadManager.Download(context.Background(), *rootFS, descriptors, p.config.ProgressChan)
+	resultRootFS, release, err := p.config.DownloadManager.Download(p.ctx, *rootFS, descriptors, p.config.ProgressChan)
 	if err != nil {
 		return false, err
 	}

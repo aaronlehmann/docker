@@ -25,6 +25,7 @@ import (
 )
 
 type v1Puller struct {
+	ctx         context.Context
 	v1IDService *metadata.V1IDService
 	endpoint    registry.APIEndpoint
 	config      *ImagePullConfig
@@ -233,7 +234,7 @@ func (p *v1Puller) pullImage(v1ID, endpoint string, localNameRef reference.Named
 	}
 
 	rootFS := image.NewRootFS()
-	resultRootFS, release, err := p.config.DownloadManager.Download(context.Background(), *rootFS, descriptors, p.config.ProgressChan)
+	resultRootFS, release, err := p.config.DownloadManager.Download(p.ctx, *rootFS, descriptors, p.config.ProgressChan)
 	if err != nil {
 		return err
 	}
@@ -323,7 +324,24 @@ func (ld *v1LayerDescriptor) Download(ctx context.Context, progressChan chan<- x
 	}
 
 	reader := xfer.NewProgressReader(layerReader, progressChan, ld.layerSize, ld.ID(), "Downloading")
+
+	transferDone := make(chan struct{})
+	go func() {
+		select {
+		case <-ctx.Done():
+			layerReader.Close()
+		case <-transferDone:
+			return
+		}
+	}()
 	io.Copy(tmpFile, reader)
+	close(transferDone)
+
+	select {
+	case <-ctx.Done():
+		return nil, 0, xfer.DoNotRetry{ctx.Err()}
+	default:
+	}
 
 	progressChan <- xfer.Progress{ID: ld.ID(), Action: "Download complete"}
 
