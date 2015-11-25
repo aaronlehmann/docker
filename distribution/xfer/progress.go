@@ -28,7 +28,7 @@ type ProgressReader struct {
 	action     string
 }
 
-// NewProgressReader creates a new ProgressReader
+// NewProgressReader creates a new ProgressReader.
 func NewProgressReader(in io.ReadCloser, out chan<- Progress, size int64, id, action string) *ProgressReader {
 	return &ProgressReader{
 		in:     in,
@@ -60,7 +60,7 @@ func (p *ProgressReader) Read(buf []byte) (n int, err error) {
 	return read, err
 }
 
-// Close closes the reader.
+// Close closes the progress reader and its underlying reader.
 func (p *ProgressReader) Close() error {
 	if p.current < p.size {
 		// print a full progress bar when closing prematurely

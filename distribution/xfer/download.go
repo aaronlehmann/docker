@@ -10,6 +10,7 @@ import (
 	"github.com/docker/docker/image"
 	"github.com/docker/docker/layer"
 	"github.com/docker/docker/pkg/archive"
+	"github.com/docker/docker/pkg/ioutils"
 	"golang.org/x/net/context"
 )
 
@@ -208,6 +209,16 @@ func (ldm *LayerDownloadManager) makeDownloadFunc(descriptor DownloadDescriptor,
 				if err == nil {
 					break
 				}
+
+				// If an error was returned because the context
+				// was cancelled, we shouldn't retry.
+				select {
+				case <-d.Transfer.Context().Done():
+					d.err = err
+					return
+				default:
+				}
+
 				retries++
 				if _, isDNR := err.(DoNotRetry); isDNR || retries == maxDownloadAttempts {
 					d.err = err
@@ -227,14 +238,13 @@ func (ldm *LayerDownloadManager) makeDownloadFunc(descriptor DownloadDescriptor,
 				}
 			}
 
-			defer downloadReader.Close()
-
 			close(inactive)
 
 			if parentDownload != nil {
 				select {
-				case <-d.Transfer.Done():
+				case <-d.Transfer.Context().Done():
 					d.err = errors.New("layer registration cancelled")
+					downloadReader.Close()
 					return
 				case <-parentDownload.Done():
 				}
@@ -242,12 +252,14 @@ func (ldm *LayerDownloadManager) makeDownloadFunc(descriptor DownloadDescriptor,
 				l, err := parentDownload.result()
 				if err != nil {
 					d.err = err
+					downloadReader.Close()
 					return
 				}
 				parentLayer = l.ChainID()
 			}
 
-			reader := NewProgressReader(downloadReader, progressChan, size, descriptor.ID(), "Extracting")
+			reader := NewProgressReader(ioutils.NewCancelReadCloser(d.Transfer.Context(), downloadReader), progressChan, size, descriptor.ID(), "Extracting")
+			defer reader.Close()
 
 			inflatedLayerData, err := archive.DecompressStream(reader)
 			if err != nil {
@@ -255,21 +267,10 @@ func (ldm *LayerDownloadManager) makeDownloadFunc(descriptor DownloadDescriptor,
 				return
 			}
 
-			registerDone := make(chan struct{})
-
-			go func() {
-				select {
-				case <-d.Transfer.Done():
-					inflatedLayerData.Close()
-				case <-registerDone:
-				}
-			}()
-
 			d.layer, err = d.layerStore.Register(inflatedLayerData, parentLayer)
-			close(registerDone)
 			if err != nil {
 				select {
-				case <-d.Transfer.Done():
+				case <-d.Transfer.Context().Done():
 					d.err = errors.New("layer registration cancelled")
 				default:
 					d.err = fmt.Errorf("failed to register layer: %v", err)

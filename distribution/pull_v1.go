@@ -315,31 +315,18 @@ func (ld *v1LayerDescriptor) Download(ctx context.Context, progressChan chan<- x
 	}
 	*ld.layersDownloaded = true
 
-	defer layerReader.Close()
-
 	tmpFile, err := ioutil.TempFile("", "GetImageBlob")
 	if err != nil {
+		layerReader.Close()
 		return nil, 0, err
 	}
 
-	reader := xfer.NewProgressReader(layerReader, progressChan, ld.layerSize, ld.ID(), "Downloading")
+	reader := xfer.NewProgressReader(ioutils.NewCancelReadCloser(ctx, layerReader), progressChan, ld.layerSize, ld.ID(), "Downloading")
+	defer reader.Close()
 
-	transferDone := make(chan struct{})
-	go func() {
-		select {
-		case <-ctx.Done():
-			layerReader.Close()
-		case <-transferDone:
-			return
-		}
-	}()
-	io.Copy(tmpFile, reader)
-	close(transferDone)
-
-	select {
-	case <-ctx.Done():
-		return nil, 0, xfer.DoNotRetry{ctx.Err()}
-	default:
+	_, err = io.Copy(tmpFile, reader)
+	if err != nil {
+		return nil, 0, err
 	}
 
 	progressChan <- xfer.Progress{ID: ld.ID(), Action: "Download complete"}

@@ -2,7 +2,6 @@ package distribution
 
 import (
 	"fmt"
-	"io/ioutil"
 	"sync"
 
 	"github.com/Sirupsen/logrus"
@@ -14,11 +13,14 @@ import (
 	"github.com/docker/docker/image"
 	"github.com/docker/docker/image/v1"
 	"github.com/docker/docker/layer"
+	"github.com/docker/docker/pkg/ioutils"
 	"github.com/docker/docker/pkg/stringid"
 	"github.com/docker/docker/registry"
+	"golang.org/x/net/context"
 )
 
 type v1Pusher struct {
+	ctx         context.Context
 	v1IDService *metadata.V1IDService
 	endpoint    registry.APIEndpoint
 	ref         reference.Named
@@ -430,7 +432,8 @@ func (p *v1Pusher) pushImage(ctx context.Context, v1Image v1Image, ep string) (c
 	// Send the layer
 	logrus.Debugf("rendered layer for %s of [%d] size", v1ID, size)
 
-	reader := xfer.NewProgressReader(ioutil.NopCloser(arch), p.config.ProgressChan, size, stringid.TruncateID(v1ID), "Pushing")
+	reader := xfer.NewProgressReader(ioutils.NewCancelReadCloser(ctx, arch), p.config.ProgressChan, size, stringid.TruncateID(v1ID), "Pushing")
+	defer reader.Close()
 
 	checksum, checksumPayload, err := p.session.PushImageLayerRegistry(v1ID, reader, ep, jsonRaw)
 	if err != nil {

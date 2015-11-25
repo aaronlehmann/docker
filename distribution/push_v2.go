@@ -5,7 +5,6 @@ import (
 	"errors"
 	"fmt"
 	"io"
-	"io/ioutil"
 	"sync"
 	"time"
 
@@ -20,6 +19,7 @@ import (
 	"github.com/docker/docker/image"
 	"github.com/docker/docker/image/v1"
 	"github.com/docker/docker/layer"
+	"github.com/docker/docker/pkg/ioutils"
 	"github.com/docker/docker/pkg/stringid"
 	"github.com/docker/docker/registry"
 	"github.com/docker/docker/tag"
@@ -220,11 +220,6 @@ func (pd *v2PushDescriptor) Upload(ctx context.Context, progressChan chan<- xfer
 	// then push the blob.
 	bs := pd.repo.Blobs(ctx)
 
-	arch, err := pd.layer.TarStream()
-	if err != nil {
-		return "", xfer.DoNotRetry{err}
-	}
-
 	// Send the layer
 	layerUpload, err := bs.Create(ctx)
 	if err != nil {
@@ -232,15 +227,16 @@ func (pd *v2PushDescriptor) Upload(ctx context.Context, progressChan chan<- xfer
 	}
 	defer layerUpload.Close()
 
+	arch, err := pd.layer.TarStream()
+	if err != nil {
+		return "", xfer.DoNotRetry{err}
+	}
+
 	// don't care if this fails; best effort
 	size, _ := pd.layer.DiffSize()
 
-	// FIXME: Interrupt the upload if ctx is cancelled. This is a bit
-	// tricky because TarStream probably needs to be modified to return
-	// an io.ReadCloser. Currently, the whole stream needs to be consumed
-	// to free up the associated resources.
-
-	reader := xfer.NewProgressReader(ioutil.NopCloser(arch), progressChan, size, pd.ID(), "Pushing")
+	reader := xfer.NewProgressReader(ioutils.NewCancelReadCloser(ctx, arch), progressChan, size, pd.ID(), "Pushing")
+	defer reader.Close()
 	compressedReader := compress(reader)
 
 	digester := digest.Canonical.New()

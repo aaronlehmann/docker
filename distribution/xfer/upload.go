@@ -110,6 +110,16 @@ func (lum *LayerUploadManager) makeUploadFunc(descriptor UploadDescriptor) DoFun
 					u.digest = digest
 					break
 				}
+
+				// If an error was returned because the context
+				// was cancelled, we shouldn't retry.
+				select {
+				case <-u.Transfer.Context().Done():
+					u.err = err
+					return
+				default:
+				}
+
 				retries++
 				if _, isDNR := err.(DoNotRetry); isDNR || retries == maxUploadAttempts {
 					u.err = err

@@ -141,7 +141,9 @@ func (ld *v2LayerDescriptor) Download(ctx context.Context, progressChan chan<- x
 		logrus.Debugf("Error fetching layer: %v", err)
 		return nil, 0, err
 	}
-	defer layerDownload.Close()
+
+	reader := xfer.NewProgressReader(ioutils.NewCancelReadCloser(ctx, layerDownload), progressChan, desc.Size, ld.ID(), "Downloading")
+	defer reader.Close()
 
 	verifier, err := digest.NewDigestVerifier(ld.digest)
 	if err != nil {
@@ -153,24 +155,9 @@ func (ld *v2LayerDescriptor) Download(ctx context.Context, progressChan chan<- x
 		return nil, 0, err
 	}
 
-	reader := xfer.NewProgressReader(ioutil.NopCloser(io.TeeReader(layerDownload, verifier)), progressChan, desc.Size, ld.ID(), "Downloading")
-
-	transferDone := make(chan struct{})
-	go func() {
-		select {
-		case <-ctx.Done():
-			layerDownload.Close()
-		case <-transferDone:
-			return
-		}
-	}()
-	io.Copy(tmpFile, reader)
-	close(transferDone)
-
-	select {
-	case <-ctx.Done():
-		return nil, 0, xfer.DoNotRetry{ctx.Err()}
-	default:
+	_, err = io.Copy(tmpFile, io.TeeReader(reader, verifier))
+	if err != nil {
+		return nil, 0, err
 	}
 
 	progressChan <- xfer.Progress{ID: ld.ID(), Action: "Verifying Checksum"}
