@@ -64,9 +64,9 @@ func (lum *LayerUploadManager) Upload(ctx context.Context, layers []UploadDescri
 		dedupDescriptors[key] = struct{}{}
 
 		xferFunc := lum.makeUploadFunc(descriptor)
-		upload := lum.tm.Transfer(descriptor.Key(), xferFunc, progressChan, nil).(*uploadTransfer)
-		defer upload.Transfer.Release(progressChan)
-		uploads = append(uploads, upload)
+		upload, watcher := lum.tm.Transfer(descriptor.Key(), xferFunc, progressChan, nil)
+		defer upload.Release(watcher)
+		uploads = append(uploads, upload.(*uploadTransfer))
 	}
 
 	for _, upload := range uploads {

@@ -80,6 +80,7 @@ func (ldm *LayerDownloadManager) Download(ctx context.Context, initialRootFS ima
 	var (
 		topLayer     layer.Layer
 		topDownload  *downloadTransfer
+		watcher      *Watcher
 		missingLayer bool
 	)
 
@@ -113,13 +114,15 @@ func (ldm *LayerDownloadManager) Download(ctx context.Context, initialRootFS ima
 		var xferFunc DoFunc
 		if topDownload != nil {
 			xferFunc = ldm.makeDownloadFunc(descriptor, "", topDownload)
-			defer topDownload.Transfer.Release(progressChan)
+			defer topDownload.Transfer.Release(watcher)
 		} else if topLayer != nil {
 			xferFunc = ldm.makeDownloadFunc(descriptor, topLayer.ChainID(), nil)
 		} else {
 			xferFunc = ldm.makeDownloadFunc(descriptor, "", nil)
 		}
-		topDownload = ldm.tm.Transfer(transferKey, xferFunc, progressChan, topDownload).(*downloadTransfer)
+		var topDownloadUncasted Transfer
+		topDownloadUncasted, watcher = ldm.tm.Transfer(transferKey, xferFunc, progressChan, topDownload)
+		topDownload = topDownloadUncasted.(*downloadTransfer)
 	}
 
 	if topDownload == nil {
@@ -140,7 +143,7 @@ selectLoop:
 	for {
 		select {
 		case <-ctx.Done():
-			topDownload.Transfer.Release(progressChan)
+			topDownload.Transfer.Release(watcher)
 			return initialRootFS, func() {}, ctx.Err()
 		case <-topDownload.Done():
 			break selectLoop
@@ -149,7 +152,7 @@ selectLoop:
 
 	l, err := topDownload.result()
 	if err != nil {
-		topDownload.Transfer.Release(progressChan)
+		topDownload.Transfer.Release(watcher)
 		return initialRootFS, func() {}, err
 	}
 
@@ -157,7 +160,7 @@ selectLoop:
 		initialRootFS.DiffIDs = append([]layer.DiffID{l.DiffID()}, initialRootFS.DiffIDs...)
 		l = l.Parent()
 	}
-	return initialRootFS, func() { topDownload.Transfer.Release(progressChan) }, err
+	return initialRootFS, func() { topDownload.Transfer.Release(watcher) }, err
 }
 
 func (ldm *LayerDownloadManager) makeDownloadFunc(descriptor DownloadDescriptor, parentLayer layer.ChainID, parentDownload *downloadTransfer) DoFunc {

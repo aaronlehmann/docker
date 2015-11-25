@@ -17,10 +17,25 @@ func (e DoNotRetry) Error() string {
 	return e.Err.Error()
 }
 
+// Watcher is returned by Watch and can be passed to Release to stop watching.
+type Watcher struct {
+	// signalChan is used to signal to the watcher goroutine that
+	// new progress information is available, or that the transfer
+	// has finished.
+	signalChan chan struct{}
+	// releaseChan signals to the watcher goroutine that the watcher
+	// should be detached.
+	releaseChan chan struct{}
+	// running remains open as long as the watcher is watching the
+	// transfer. It gets closed if the transfer finishes or the
+	// watcher is detached.
+	running chan struct{}
+}
+
 // Transfer represents an in-progress transfer.
 type Transfer interface {
-	Watch(progressChan chan<- Progress)
-	Release(progressChan chan<- Progress)
+	Watch(progressChan chan<- Progress) *Watcher
+	Release(*Watcher)
 	Context() context.Context
 	Cancel()
 	Done() <-chan struct{}
@@ -34,22 +49,30 @@ type transfer struct {
 	ctx    context.Context
 	cancel context.CancelFunc
 
-	// progressChans has channels that the progress messages fan out to
-	// as its keys.
-	progressChans map[chan<- Progress]struct{}
+	// watchers keeps track of the goroutines monitoring progress output,
+	// indexed by the channels that release them.
+	watchers map[chan struct{}]*Watcher
+
+	// lastProgress is the most recently received progress event.
+	lastProgress Progress
+	// hasLastProgress is true when lastProgress has been set.
+	hasLastProgress bool
 
 	// running remains open as long as the transfer is in progress.
 	running chan struct{}
 	// hasWatchers stays open until all watchers release the trasnfer.
 	hasWatchers chan struct{}
+
+	// broadcastDone is true if the master progress channel has closed.
+	broadcastDone bool
 }
 
 // NewTransfer creates a new transfer.
 func NewTransfer() Transfer {
 	t := &transfer{
-		progressChans: make(map[chan<- Progress]struct{}),
-		running:       make(chan struct{}),
-		hasWatchers:   make(chan struct{}),
+		watchers:    make(map[chan struct{}]*Watcher),
+		running:     make(chan struct{}),
+		hasWatchers: make(chan struct{}),
 	}
 
 	// This uses context.Background instead of a caller-supplied context
@@ -65,16 +88,22 @@ func (t *transfer) Broadcast(masterProgressChan <-chan Progress) {
 	for {
 		p, ok := <-masterProgressChan
 		t.mu.Lock()
-		for c := range t.progressChans {
-			if ok {
-				c <- p
+		if ok {
+			t.lastProgress = p
+			t.hasLastProgress = true
+			for _, w := range t.watchers {
+				select {
+				case w.signalChan <- struct{}{}:
+				default:
+				}
 			}
-		}
-		if !ok {
-			close(t.running)
+
+		} else {
+			t.broadcastDone = true
 		}
 		t.mu.Unlock()
 		if !ok {
+			close(t.running)
 			return
 		}
 	}
@@ -82,32 +111,75 @@ func (t *transfer) Broadcast(masterProgressChan <-chan Progress) {
 
 // Watch adds a watcher to the transfer. The supplied channel gets progress
 // updates and is closed when the transfer finishes.
-func (t *transfer) Watch(progressChan chan<- Progress) {
+func (t *transfer) Watch(progressChan chan<- Progress) *Watcher {
 	t.mu.Lock()
 	defer t.mu.Unlock()
 
-	select {
-	case <-t.running:
-		// transfer is already finished
-	default:
-		t.progressChans[progressChan] = struct{}{}
+	w := &Watcher{
+		releaseChan: make(chan struct{}),
+		signalChan:  make(chan struct{}),
+		running:     make(chan struct{}),
 	}
+
+	if t.broadcastDone {
+		close(w.running)
+		return w
+	}
+
+	t.watchers[w.releaseChan] = w
+
+	go func() {
+		defer func() {
+			close(w.running)
+		}()
+		done := false
+		for {
+			t.mu.Lock()
+			hasLastProgress := t.hasLastProgress
+			lastProgress := t.lastProgress
+			t.mu.Unlock()
+
+			// This might write the last progress item a
+			// second time (since channel closure also gets
+			// us here), but that's fine.
+			if hasLastProgress {
+				progressChan <- lastProgress
+			}
+
+			if done {
+				return
+			}
+
+			select {
+			case <-w.signalChan:
+			case <-w.releaseChan:
+				done = true
+			case <-t.running:
+				done = true
+			}
+		}
+	}()
+
+	return w
 }
 
 // Release is the inverse of Watch; indicating that the watcher no longer wants
 // to be notified about the progress of the transfer. All calls to Watch must
 // be paired with later calls to Release so that the lifecycle of the transfer
 // is properly managed.
-func (t *transfer) Release(progressChan chan<- Progress) {
+func (t *transfer) Release(watcher *Watcher) {
 	t.mu.Lock()
-	defer t.mu.Unlock()
+	delete(t.watchers, watcher.releaseChan)
 
-	delete(t.progressChans, progressChan)
-
-	if len(t.progressChans) == 0 {
+	if len(t.watchers) == 0 {
 		close(t.hasWatchers)
 		t.cancel()
 	}
+	t.mu.Unlock()
+
+	close(watcher.releaseChan)
+	// Block until the watcher goroutine completes
+	<-watcher.running
 }
 
 // Done returns a channel which is closed if the transfer completes or is
@@ -157,7 +229,7 @@ type TransferManager interface {
 	// prioritize transfers so that the one referenced by dependency
 	// happens before this one. This does not provide any guarantees to the
 	// caller; it's more about providing hints for better scheduling.
-	Transfer(key string, xferFunc DoFunc, progressChan chan<- Progress, dependency Transfer) Transfer
+	Transfer(key string, xferFunc DoFunc, progressChan chan<- Progress, dependency Transfer) (Transfer, *Watcher)
 }
 
 type transferManager struct {
@@ -180,7 +252,7 @@ func NewTransferManager(concurrencyLimit int) TransferManager {
 // Transfer checks if a transfer matching the given key is in progress. If not,
 // it starts one by calling xferFunc. The caller supplies a channel which
 // receives progress output from the transfer.
-func (tm *transferManager) Transfer(key string, xferFunc DoFunc, progressChan chan<- Progress, dependency Transfer) Transfer {
+func (tm *transferManager) Transfer(key string, xferFunc DoFunc, progressChan chan<- Progress, dependency Transfer) (Transfer, *Watcher) {
 	// FIXME: schedule transfers based on dependencies
 	// FIXME: limit concurrency
 
@@ -189,8 +261,8 @@ func (tm *transferManager) Transfer(key string, xferFunc DoFunc, progressChan ch
 
 	if xfer, present := tm.transfers[key]; present {
 		// Transfer is already in progress.
-		xfer.Watch(progressChan)
-		return xfer
+		watcher := xfer.Watch(progressChan)
+		return xfer, watcher
 	}
 
 	start := make(chan struct{})
@@ -205,7 +277,7 @@ func (tm *transferManager) Transfer(key string, xferFunc DoFunc, progressChan ch
 
 	masterProgressChan := make(chan Progress)
 	xfer := xferFunc(masterProgressChan, start, inactive)
-	xfer.Watch(progressChan)
+	watcher := xfer.Watch(progressChan)
 	go xfer.Broadcast(masterProgressChan)
 	tm.transfers[key] = xfer
 
@@ -230,7 +302,7 @@ func (tm *transferManager) Transfer(key string, xferFunc DoFunc, progressChan ch
 		}
 	}()
 
-	return xfer
+	return xfer, watcher
 }
 
 func (tm *transferManager) inactivate(start chan struct{}) {
