@@ -309,9 +309,8 @@ func (ld *v1LayerDescriptor) Download(ctx context.Context, progressChan chan<- x
 		}
 		if terr, ok := err.(net.Error); ok && terr.Timeout() {
 			return nil, 0, err
-		} else {
-			return nil, 0, xfer.DoNotRetry{err}
 		}
+		return nil, 0, xfer.DoNotRetry{err}
 	}
 	*ld.layersDownloaded = true
 
