@@ -79,15 +79,17 @@ type DownloadDescriptorWithRegistered interface {
 // release function once it is is done with the returned RootFS object.
 func (ldm *LayerDownloadManager) Download(ctx context.Context, initialRootFS image.RootFS, layers []DownloadDescriptor, progressChan chan<- Progress) (image.RootFS, func(), error) {
 	var (
-		topLayer     layer.Layer
-		topDownload  *downloadTransfer
-		watcher      *Watcher
-		missingLayer bool
+		topLayer       layer.Layer
+		topDownload    *downloadTransfer
+		watcher        *Watcher
+		missingLayer   bool
+		transferKey    = ""
+		downloadsByKey = make(map[string]*downloadTransfer)
 	)
 
-	transferKey := ""
 	for _, descriptor := range layers {
-		transferKey += descriptor.Key()
+		key := descriptor.Key()
+		transferKey += key
 
 		if !missingLayer {
 			missingLayer = true
@@ -109,6 +111,17 @@ func (ldm *LayerDownloadManager) Download(ctx context.Context, initialRootFS ima
 			}
 		}
 
+		// Does this layer have the same data as a previous layer in
+		// the stack? If so, avoid downloading it more than once.
+		var topDownloadUncasted Transfer
+		if existingDownload, ok := downloadsByKey[key]; ok {
+			xferFunc := ldm.makeDownloadFuncFromDownload(descriptor, existingDownload, topDownload)
+			defer topDownload.Transfer.Release(watcher)
+			topDownloadUncasted, watcher = ldm.tm.Transfer(transferKey, xferFunc, progressChan, topDownload)
+			topDownload = topDownloadUncasted.(*downloadTransfer)
+			continue
+		}
+
 		// Layer is not known to exist - download and register it.
 		progressChan <- downloadMessage(descriptor, "Pulling fs layer")
 
@@ -121,9 +134,9 @@ func (ldm *LayerDownloadManager) Download(ctx context.Context, initialRootFS ima
 		} else {
 			xferFunc = ldm.makeDownloadFunc(descriptor, "", nil)
 		}
-		var topDownloadUncasted Transfer
 		topDownloadUncasted, watcher = ldm.tm.Transfer(transferKey, xferFunc, progressChan, topDownload)
 		topDownload = topDownloadUncasted.(*downloadTransfer)
+		downloadsByKey[key] = topDownload
 	}
 
 	if topDownload == nil {
@@ -164,6 +177,11 @@ selectLoop:
 	return initialRootFS, func() { topDownload.Transfer.Release(watcher) }, err
 }
 
+// makeDownloadFunc returns a function that performs the layer download and
+// registration. If parentDownload is non-nil, it waits for that download to
+// complete before the registration step, and registers the downloaded data
+// on top of parentDownload's resulting layer. Otherwise, it registers the
+// layer on top of the ChainID given by parentLayer.
 func (ldm *LayerDownloadManager) makeDownloadFunc(descriptor DownloadDescriptor, parentLayer layer.ChainID, parentDownload *downloadTransfer) DoFunc {
 	return func(progressChan chan<- Progress, start <-chan struct{}, inactive chan<- struct{}) Transfer {
 		d := &downloadTransfer{
@@ -279,6 +297,93 @@ func (ldm *LayerDownloadManager) makeDownloadFunc(descriptor DownloadDescriptor,
 			}
 
 			progressChan <- downloadMessage(descriptor, "Pull complete")
+			withRegistered, hasRegistered := descriptor.(DownloadDescriptorWithRegistered)
+			if hasRegistered {
+				withRegistered.Registered(d.layer.DiffID())
+			}
+
+			// Doesn't actually need to be its own goroutine, but
+			// done like this so we can defer close(c).
+			go func() {
+				<-d.Transfer.Released()
+				if d.layer != nil {
+					layer.ReleaseAndLog(d.layerStore, d.layer)
+				}
+			}()
+		}()
+
+		return d
+	}
+}
+
+// makeDownloadFuncFromDownload returns a function that performs the layer
+// registration when the layer data is coming from an existing download. It
+// waits for sourceDownload and parentDownload to complete, and then
+// reregisters the data from sourceDownload's top layer on top of
+// parentDownload. This function does not log progress output because it would
+// interfere with the progress reporting for sourceDownload, which has the same
+// Key.
+func (ldm *LayerDownloadManager) makeDownloadFuncFromDownload(descriptor DownloadDescriptor, sourceDownload *downloadTransfer, parentDownload *downloadTransfer) DoFunc {
+	return func(progressChan chan<- Progress, start <-chan struct{}, inactive chan<- struct{}) Transfer {
+		d := &downloadTransfer{
+			Transfer:   NewTransfer(),
+			layerStore: ldm.layerStore,
+		}
+
+		go func() {
+			defer func() {
+				close(progressChan)
+			}()
+
+			select {
+			case <-start:
+			default:
+				<-start
+			}
+
+			select {
+			case <-d.Transfer.Context().Done():
+				d.err = errors.New("layer registration cancelled")
+				return
+			case <-parentDownload.Done():
+			}
+
+			l, err := parentDownload.result()
+			if err != nil {
+				d.err = err
+				return
+			}
+			parentLayer := l.ChainID()
+
+			// sourceDownload should have already finished if
+			// parentDownload finished, but wait for it explicitly
+			// to be sure.
+			select {
+			case <-d.Transfer.Context().Done():
+				d.err = errors.New("layer registration cancelled")
+				return
+			case <-sourceDownload.Done():
+			}
+
+			l, err = sourceDownload.result()
+			if err != nil {
+				d.err = err
+				return
+			}
+
+			layerReader, err := l.TarStream()
+			if err != nil {
+				d.err = err
+				return
+			}
+			defer layerReader.Close()
+
+			d.layer, err = d.layerStore.Register(layerReader, parentLayer)
+			if err != nil {
+				d.err = fmt.Errorf("failed to register layer: %v", err)
+				return
+			}
+
 			withRegistered, hasRegistered := descriptor.(DownloadDescriptorWithRegistered)
 			if hasRegistered {
 				withRegistered.Registered(d.layer.DiffID())
