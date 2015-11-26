@@ -49,7 +49,7 @@ type Puller interface {
 	// Pull tries to pull the image referenced by `tag`
 	// Pull returns an error if any, as well as a boolean that determines whether to retry Pull on the next configured endpoint.
 	//
-	Pull(ref reference.Named) (fallback bool, err error)
+	Pull(ctx context.Context, ref reference.Named) (fallback bool, err error)
 }
 
 // newPuller returns a Puller interface that will pull from either a v1 or v2
@@ -57,11 +57,10 @@ type Puller interface {
 // whether a v1 or v2 puller will be created. The other parameters are passed
 // through to the underlying puller implementation for use during the actual
 // pull operation.
-func newPuller(ctx context.Context, endpoint registry.APIEndpoint, repoInfo *registry.RepositoryInfo, imagePullConfig *ImagePullConfig) (Puller, error) {
+func newPuller(endpoint registry.APIEndpoint, repoInfo *registry.RepositoryInfo, imagePullConfig *ImagePullConfig) (Puller, error) {
 	switch endpoint.Version {
 	case registry.APIVersion2:
 		return &v2Puller{
-			ctx:            ctx,
 			blobSumService: metadata.NewBlobSumService(imagePullConfig.MetadataStore),
 			endpoint:       endpoint,
 			config:         imagePullConfig,
@@ -69,7 +68,6 @@ func newPuller(ctx context.Context, endpoint registry.APIEndpoint, repoInfo *reg
 		}, nil
 	case registry.APIVersion1:
 		return &v1Puller{
-			ctx:         ctx,
 			v1IDService: metadata.NewV1IDService(imagePullConfig.MetadataStore),
 			endpoint:    endpoint,
 			config:      imagePullConfig,
@@ -116,12 +114,12 @@ func Pull(ctx context.Context, ref reference.Named, imagePullConfig *ImagePullCo
 	for _, endpoint := range endpoints {
 		logrus.Debugf("Trying to pull %s from %s %s", repoInfo.LocalName, endpoint.URL, endpoint.Version)
 
-		puller, err := newPuller(ctx, endpoint, repoInfo, imagePullConfig)
+		puller, err := newPuller(endpoint, repoInfo, imagePullConfig)
 		if err != nil {
 			errors = append(errors, err.Error())
 			continue
 		}
-		if fallback, err := puller.Pull(ref); err != nil {
+		if fallback, err := puller.Pull(ctx, ref); err != nil {
 			// Was this pull cancelled? If so, don't try to fall
 			// back.
 			select {

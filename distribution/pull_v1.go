@@ -25,7 +25,6 @@ import (
 )
 
 type v1Puller struct {
-	ctx         context.Context
 	v1IDService *metadata.V1IDService
 	endpoint    registry.APIEndpoint
 	config      *ImagePullConfig
@@ -33,7 +32,7 @@ type v1Puller struct {
 	session     *registry.Session
 }
 
-func (p *v1Puller) Pull(ref reference.Named) (fallback bool, err error) {
+func (p *v1Puller) Pull(ctx context.Context, ref reference.Named) (fallback bool, err error) {
 	if _, isDigested := ref.(reference.Digested); isDigested {
 		// Allowing fallback, because HTTPS v1 is before HTTP v2
 		return true, registry.ErrNoSupport{errors.New("Cannot pull by digest with v1 registry")}
@@ -61,7 +60,7 @@ func (p *v1Puller) Pull(ref reference.Named) (fallback bool, err error) {
 		logrus.Debugf("Fallback from error: %s", err)
 		return true, err
 	}
-	if err := p.pullRepository(ref); err != nil {
+	if err := p.pullRepository(ctx, ref); err != nil {
 		// TODO(dmcgowan): Check if should fallback
 		return false, err
 	}
@@ -70,7 +69,7 @@ func (p *v1Puller) Pull(ref reference.Named) (fallback bool, err error) {
 	return false, nil
 }
 
-func (p *v1Puller) pullRepository(ref reference.Named) error {
+func (p *v1Puller) pullRepository(ctx context.Context, ref reference.Named) error {
 	p.config.ProgressChan <- xfer.Progress{Message: "Pulling repository " + p.repoInfo.CanonicalName.Name()}
 
 	repoData, err := p.session.GetRepositoryData(p.repoInfo.RemoteName)
@@ -115,7 +114,7 @@ func (p *v1Puller) pullRepository(ref reference.Named) error {
 			continue
 		}
 
-		err := p.downloadImage(repoData, imgData, &layersDownloaded)
+		err := p.downloadImage(ctx, repoData, imgData, &layersDownloaded)
 		if err != nil {
 			return err
 		}
@@ -132,7 +131,7 @@ func (p *v1Puller) pullRepository(ref reference.Named) error {
 	return nil
 }
 
-func (p *v1Puller) downloadImage(repoData *registry.RepositoryData, img *registry.ImgData, layersDownloaded *bool) error {
+func (p *v1Puller) downloadImage(ctx context.Context, repoData *registry.RepositoryData, img *registry.ImgData, layersDownloaded *bool) error {
 	if img.Tag == "" {
 		logrus.Debugf("Image (id: %s) present in this repository but untagged, skipping", img.ID)
 		return nil
@@ -155,7 +154,7 @@ func (p *v1Puller) downloadImage(repoData *registry.RepositoryData, img *registr
 	for _, ep := range p.repoInfo.Index.Mirrors {
 		ep += "v1/"
 		p.config.ProgressChan <- xfer.Progress{ID: stringid.TruncateID(img.ID), Action: fmt.Sprintf("Pulling image (%s) from %s, mirror: %s", img.Tag, p.repoInfo.CanonicalName.Name(), ep)}
-		if err = p.pullImage(img.ID, ep, localNameRef, layersDownloaded); err != nil {
+		if err = p.pullImage(ctx, img.ID, ep, localNameRef, layersDownloaded); err != nil {
 			// Don't report errors when pulling from mirrors.
 			logrus.Debugf("Error pulling image (%s) from %s, mirror: %s, %s", img.Tag, p.repoInfo.CanonicalName.Name(), ep, err)
 			continue
@@ -166,7 +165,7 @@ func (p *v1Puller) downloadImage(repoData *registry.RepositoryData, img *registr
 	if !success {
 		for _, ep := range repoData.Endpoints {
 			p.config.ProgressChan <- xfer.Progress{ID: stringid.TruncateID(img.ID), Action: fmt.Sprintf("Pulling image (%s) from %s, endpoint: %s", img.Tag, p.repoInfo.CanonicalName.Name(), ep)}
-			if err = p.pullImage(img.ID, ep, localNameRef, layersDownloaded); err != nil {
+			if err = p.pullImage(ctx, img.ID, ep, localNameRef, layersDownloaded); err != nil {
 				// It's not ideal that only the last error is returned, it would be better to concatenate the errors.
 				// As the error is also given to the output stream the user will see the error.
 				lastErr = err
@@ -186,7 +185,7 @@ func (p *v1Puller) downloadImage(repoData *registry.RepositoryData, img *registr
 	return nil
 }
 
-func (p *v1Puller) pullImage(v1ID, endpoint string, localNameRef reference.Named, layersDownloaded *bool) (err error) {
+func (p *v1Puller) pullImage(ctx context.Context, v1ID, endpoint string, localNameRef reference.Named, layersDownloaded *bool) (err error) {
 	var history []string
 	history, err = p.session.GetRemoteHistory(v1ID, endpoint)
 	if err != nil {
@@ -234,7 +233,7 @@ func (p *v1Puller) pullImage(v1ID, endpoint string, localNameRef reference.Named
 	}
 
 	rootFS := image.NewRootFS()
-	resultRootFS, release, err := p.config.DownloadManager.Download(p.ctx, *rootFS, descriptors, p.config.ProgressChan)
+	resultRootFS, release, err := p.config.DownloadManager.Download(ctx, *rootFS, descriptors, p.config.ProgressChan)
 	if err != nil {
 		return err
 	}

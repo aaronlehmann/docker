@@ -27,7 +27,6 @@ import (
 )
 
 type v2Pusher struct {
-	ctx            context.Context
 	blobSumService *metadata.BlobSumService
 	ref            reference.Named
 	endpoint       registry.APIEndpoint
@@ -46,7 +45,7 @@ type pushMap struct {
 	layersPushed map[digest.Digest]bool
 }
 
-func (p *v2Pusher) Push() (fallback bool, err error) {
+func (p *v2Pusher) Push(ctx context.Context) (fallback bool, err error) {
 	p.repo, err = NewV2Repository(p.repoInfo, p.endpoint, p.config.MetaHeaders, p.config.AuthConfig, "push", "pull")
 	if err != nil {
 		logrus.Debugf("Error getting v2 registry: %v", err)
@@ -80,7 +79,7 @@ func (p *v2Pusher) Push() (fallback bool, err error) {
 	}
 
 	for _, association := range associations {
-		if err := p.pushV2Tag(association); err != nil {
+		if err := p.pushV2Tag(ctx, association); err != nil {
 			return false, err
 		}
 	}
@@ -88,7 +87,7 @@ func (p *v2Pusher) Push() (fallback bool, err error) {
 	return false, nil
 }
 
-func (p *v2Pusher) pushV2Tag(association tag.Association) error {
+func (p *v2Pusher) pushV2Tag(ctx context.Context, association tag.Association) error {
 	ref := association.Ref
 	logrus.Debugf("Pushing repository: %s", ref.String())
 
@@ -140,7 +139,7 @@ func (p *v2Pusher) pushV2Tag(association tag.Association) error {
 		l = l.Parent()
 	}
 
-	fsLayers, err := p.config.UploadManager.Upload(p.ctx, descriptors, p.config.ProgressChan)
+	fsLayers, err := p.config.UploadManager.Upload(ctx, descriptors, p.config.ProgressChan)
 	if err != nil {
 		return err
 	}
@@ -172,7 +171,7 @@ func (p *v2Pusher) pushV2Tag(association tag.Association) error {
 		}
 	}
 
-	manSvc, err := p.repo.Manifests(p.ctx)
+	manSvc, err := p.repo.Manifests(ctx)
 	if err != nil {
 		return err
 	}

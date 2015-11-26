@@ -27,7 +27,7 @@ type v1Pusher struct {
 	session     *registry.Session
 }
 
-func (p *v1Pusher) Push() (fallback bool, err error) {
+func (p *v1Pusher) Push(ctx context.Context) (fallback bool, err error) {
 	tlsConfig, err := p.config.RegistryService.TLSConfig(p.repoInfo.Index.Name)
 	if err != nil {
 		return false, err
@@ -49,7 +49,7 @@ func (p *v1Pusher) Push() (fallback bool, err error) {
 		// TODO(dmcgowan): Check if should fallback
 		return true, err
 	}
-	if err := p.pushRepository(); err != nil {
+	if err := p.pushRepository(ctx); err != nil {
 		// TODO(dmcgowan): Check if should fallback
 		return false, err
 	}
@@ -305,7 +305,7 @@ func (p *v1Pusher) lookupImageOnEndpoint(wg *sync.WaitGroup, endpoint string, im
 	}
 }
 
-func (p *v1Pusher) pushImageToEndpoint(endpoint string, imageList []v1Image, tags map[image.ID][]string, repo *registry.RepositoryData) error {
+func (p *v1Pusher) pushImageToEndpoint(ctx context.Context, endpoint string, imageList []v1Image, tags map[image.ID][]string, repo *registry.RepositoryData) error {
 	workerCount := len(imageList)
 	// start a maximum of 5 workers to check if images exist on the specified endpoint.
 	if workerCount > 5 {
@@ -343,7 +343,7 @@ func (p *v1Pusher) pushImageToEndpoint(endpoint string, imageList []v1Image, tag
 	for _, img := range imageList {
 		v1ID := img.V1ID()
 		if _, push := shouldPush[v1ID]; push {
-			if _, err := p.pushImage(img, endpoint); err != nil {
+			if _, err := p.pushImage(ctx, img, endpoint); err != nil {
 				// FIXME: Continue on error?
 				return err
 			}
@@ -361,7 +361,7 @@ func (p *v1Pusher) pushImageToEndpoint(endpoint string, imageList []v1Image, tag
 }
 
 // pushRepository pushes layers that do not already exist on the registry.
-func (p *v1Pusher) pushRepository() error {
+func (p *v1Pusher) pushRepository(ctx context.Context) error {
 	imgList, tags, referencedLayers, err := p.getImageList()
 	defer func() {
 		for _, l := range referencedLayers {
@@ -387,7 +387,7 @@ func (p *v1Pusher) pushRepository() error {
 	p.config.ProgressChan <- xfer.Progress{Message: "Pushing repository " + p.repoInfo.CanonicalName.String()}
 	// push the repository to each of the endpoints only if it does not exist.
 	for _, endpoint := range repoData.Endpoints {
-		if err := p.pushImageToEndpoint(endpoint, imgList, tags, repoData); err != nil {
+		if err := p.pushImageToEndpoint(ctx, endpoint, imgList, tags, repoData); err != nil {
 			return err
 		}
 	}
@@ -395,7 +395,7 @@ func (p *v1Pusher) pushRepository() error {
 	return err
 }
 
-func (p *v1Pusher) pushImage(v1Image v1Image, ep string) (checksum string, err error) {
+func (p *v1Pusher) pushImage(ctx context.Context, v1Image v1Image, ep string) (checksum string, err error) {
 	v1ID := v1Image.V1ID()
 
 	jsonRaw := v1Image.Config()

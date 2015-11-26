@@ -26,7 +26,6 @@ import (
 )
 
 type v2Puller struct {
-	ctx            context.Context
 	blobSumService *metadata.BlobSumService
 	endpoint       registry.APIEndpoint
 	config         *ImagePullConfig
@@ -34,7 +33,7 @@ type v2Puller struct {
 	repo           distribution.Repository
 }
 
-func (p *v2Puller) Pull(ref reference.Named) (fallback bool, err error) {
+func (p *v2Puller) Pull(ctx context.Context, ref reference.Named) (fallback bool, err error) {
 	// TODO(tiborvass): was ReceiveTimeout
 	p.repo, err = NewV2Repository(p.repoInfo, p.endpoint, p.config.MetaHeaders, p.config.AuthConfig, "pull")
 	if err != nil {
@@ -42,7 +41,7 @@ func (p *v2Puller) Pull(ref reference.Named) (fallback bool, err error) {
 		return true, err
 	}
 
-	if err := p.pullV2Repository(ref); err != nil {
+	if err := p.pullV2Repository(ctx, ref); err != nil {
 		if registry.ContinueOnError(err) {
 			logrus.Debugf("Error trying v2 registry: %v", err)
 			return true, err
@@ -52,7 +51,7 @@ func (p *v2Puller) Pull(ref reference.Named) (fallback bool, err error) {
 	return false, nil
 }
 
-func (p *v2Puller) pullV2Repository(ref reference.Named) (err error) {
+func (p *v2Puller) pullV2Repository(ctx context.Context, ref reference.Named) (err error) {
 	var refs []reference.Named
 	taggedName := p.repoInfo.LocalName
 	if tagged, isTagged := ref.(reference.Tagged); isTagged {
@@ -68,7 +67,7 @@ func (p *v2Puller) pullV2Repository(ref reference.Named) (err error) {
 		}
 		refs = []reference.Named{taggedName}
 	} else {
-		manSvc, err := p.repo.Manifests(p.ctx)
+		manSvc, err := p.repo.Manifests(ctx)
 		if err != nil {
 			return err
 		}
@@ -93,7 +92,7 @@ func (p *v2Puller) pullV2Repository(ref reference.Named) (err error) {
 	for _, pullRef := range refs {
 		// pulledNew is true if either new layers were downloaded OR if existing images were newly tagged
 		// TODO(tiborvass): should we change the name of `layersDownload`? What about message in WriteStatus?
-		pulledNew, err := p.pullV2Tag(pullRef)
+		pulledNew, err := p.pullV2Tag(ctx, pullRef)
 		if err != nil {
 			return err
 		}
@@ -200,7 +199,7 @@ func (ld *v2LayerDescriptor) Registered(diffID layer.DiffID) {
 	ld.blobSumService.Add(diffID, ld.digest)
 }
 
-func (p *v2Puller) pullV2Tag(ref reference.Named) (tagUpdated bool, err error) {
+func (p *v2Puller) pullV2Tag(ctx context.Context, ref reference.Named) (tagUpdated bool, err error) {
 	tagOrDigest := ""
 	if tagged, isTagged := ref.(reference.Tagged); isTagged {
 		tagOrDigest = tagged.Tag()
@@ -212,7 +211,7 @@ func (p *v2Puller) pullV2Tag(ref reference.Named) (tagUpdated bool, err error) {
 
 	logrus.Debugf("Pulling ref from V2 registry: %q", tagOrDigest)
 
-	manSvc, err := p.repo.Manifests(p.ctx)
+	manSvc, err := p.repo.Manifests(ctx)
 	if err != nil {
 		return false, err
 	}
@@ -280,7 +279,7 @@ func (p *v2Puller) pullV2Tag(ref reference.Named) (tagUpdated bool, err error) {
 		descriptors = append(descriptors, layerDescriptor)
 	}
 
-	resultRootFS, release, err := p.config.DownloadManager.Download(p.ctx, *rootFS, descriptors, p.config.ProgressChan)
+	resultRootFS, release, err := p.config.DownloadManager.Download(ctx, *rootFS, descriptors, p.config.ProgressChan)
 	if err != nil {
 		return false, err
 	}
