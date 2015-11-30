@@ -217,19 +217,13 @@ func (t *transfer) Cancel() {
 type DoFunc func(progressChan chan<- Progress, start <-chan struct{}, inactive chan<- struct{}) Transfer
 
 // TransferManager is used by LayerDownloadManager and LayerUploadManager to
-// schedule and deduplicate transfers. Transfers are scheduled based on
-// dependencies between them. It is up to the TransferManager implementation
-// to make the scheduling and concurrency decisions.
+// schedule and deduplicate transfers. It is up to the TransferManager
+// implementation to make the scheduling and concurrency decisions.
 type TransferManager interface {
 	// Transfer checks if a transfer with the given key is in progress. If
 	// so, it returns progress and error output from that transfer.
 	// Otherwise, it will call xferFunc to initiate the transfer.
-	//
-	// If dependency is non-nil, the transfer manager should try to
-	// prioritize transfers so that the one referenced by dependency
-	// happens before this one. This does not provide any guarantees to the
-	// caller; it's more about providing hints for better scheduling.
-	Transfer(key string, xferFunc DoFunc, progressChan chan<- Progress, dependency Transfer) (Transfer, *Watcher)
+	Transfer(key string, xferFunc DoFunc, progressChan chan<- Progress) (Transfer, *Watcher)
 }
 
 type transferManager struct {
@@ -252,10 +246,7 @@ func NewTransferManager(concurrencyLimit int) TransferManager {
 // Transfer checks if a transfer matching the given key is in progress. If not,
 // it starts one by calling xferFunc. The caller supplies a channel which
 // receives progress output from the transfer.
-func (tm *transferManager) Transfer(key string, xferFunc DoFunc, progressChan chan<- Progress, dependency Transfer) (Transfer, *Watcher) {
-	// FIXME: schedule transfers based on dependencies
-	// FIXME: limit concurrency
-
+func (tm *transferManager) Transfer(key string, xferFunc DoFunc, progressChan chan<- Progress) (Transfer, *Watcher) {
 	tm.mu.Lock()
 	defer tm.mu.Unlock()
 

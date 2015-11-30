@@ -117,7 +117,7 @@ func (ldm *LayerDownloadManager) Download(ctx context.Context, initialRootFS ima
 		if existingDownload, ok := downloadsByKey[key]; ok {
 			xferFunc := ldm.makeDownloadFuncFromDownload(descriptor, existingDownload, topDownload)
 			defer topDownload.Transfer.Release(watcher)
-			topDownloadUncasted, watcher = ldm.tm.Transfer(transferKey, xferFunc, progressChan, topDownload)
+			topDownloadUncasted, watcher = ldm.tm.Transfer(transferKey, xferFunc, progressChan)
 			topDownload = topDownloadUncasted.(*downloadTransfer)
 			continue
 		}
@@ -134,7 +134,7 @@ func (ldm *LayerDownloadManager) Download(ctx context.Context, initialRootFS ima
 		} else {
 			xferFunc = ldm.makeDownloadFunc(descriptor, "", nil)
 		}
-		topDownloadUncasted, watcher = ldm.tm.Transfer(transferKey, xferFunc, progressChan, topDownload)
+		topDownloadUncasted, watcher = ldm.tm.Transfer(transferKey, xferFunc, progressChan)
 		topDownload = topDownloadUncasted.(*downloadTransfer)
 		downloadsByKey[key] = topDownload
 	}
