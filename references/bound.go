@@ -1,4 +1,4 @@
-package reference
+package references
 
 // FIXME rename package to references
 

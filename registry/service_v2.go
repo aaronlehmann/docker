@@ -4,11 +4,11 @@ import (
 	"fmt"
 	"strings"
 
-	"github.com/docker/docker/reference"
+	"github.com/docker/docker/references"
 	"github.com/docker/go-connections/tlsconfig"
 )
 
-func (s *Service) lookupV2Endpoints(repoName reference.Named) (endpoints []APIEndpoint, err error) {
+func (s *Service) lookupV2Endpoints(repoName references.BoundNamed) (endpoints []APIEndpoint, err error) {
 	var cfg = tlsconfig.ServerDefault
 	tlsConfig := &cfg
 	nameString := repoName.FullName()

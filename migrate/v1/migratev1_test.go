@@ -16,7 +16,7 @@ import (
 	"github.com/docker/docker/distribution/metadata"
 	"github.com/docker/docker/image"
 	"github.com/docker/docker/layer"
-	"github.com/docker/docker/reference"
+	"github.com/docker/docker/references"
 )
 
 func TestMigrateRefs(t *testing.T) {
@@ -318,14 +318,14 @@ type mockTagAdder struct {
 	refs map[string]string
 }
 
-func (t *mockTagAdder) AddTag(ref reference.Named, id image.ID, force bool) error {
+func (t *mockTagAdder) AddTag(ref references.BoundNamed, id image.ID, force bool) error {
 	if t.refs == nil {
 		t.refs = make(map[string]string)
 	}
 	t.refs[ref.String()] = id.String()
 	return nil
 }
-func (t *mockTagAdder) AddDigest(ref reference.Canonical, id image.ID, force bool) error {
+func (t *mockTagAdder) AddDigest(ref references.BoundCanonical, id image.ID, force bool) error {
 	return t.AddTag(ref, id, force)
 }
 

@@ -23,7 +23,7 @@ import (
 	"github.com/docker/docker/distribution"
 	"github.com/docker/docker/pkg/jsonmessage"
 	flag "github.com/docker/docker/pkg/mflag"
-	"github.com/docker/docker/reference"
+	"github.com/docker/docker/references"
 	"github.com/docker/docker/registry"
 	apiclient "github.com/docker/engine-api/client"
 	"github.com/docker/engine-api/types"
@@ -227,7 +227,7 @@ func (cli *DockerCli) getPassphraseRetriever() passphrase.Retriever {
 	}
 }
 
-func (cli *DockerCli) trustedReference(ref reference.NamedTagged) (reference.Canonical, error) {
+func (cli *DockerCli) trustedReference(ref references.BoundTagged) (references.BoundCanonical, error) {
 	repoInfo, err := registry.ParseRepositoryInfo(ref)
 	if err != nil {
 		return nil, err
@@ -252,10 +252,10 @@ func (cli *DockerCli) trustedReference(ref reference.NamedTagged) (reference.Can
 
 	}
 
-	return reference.WithDigest(ref, r.digest)
+	return ref.WithDigest(r.digest)
 }
 
-func (cli *DockerCli) tagTrusted(trustedRef reference.Canonical, ref reference.NamedTagged) error {
+func (cli *DockerCli) tagTrusted(trustedRef references.BoundCanonical, ref references.BoundTagged) error {
 	fmt.Fprintf(cli.out, "Tagging %s as %s\n", trustedRef.String(), ref.String())
 
 	options := types.ImageTagOptions{
@@ -345,11 +345,11 @@ func (cli *DockerCli) trustedPull(repoInfo *registry.RepositoryInfo, ref registr
 
 		// If reference is not trusted, tag by trusted reference
 		if !r.reference.HasDigest() {
-			tagged, err := reference.WithTag(repoInfo, r.reference.String())
+			tagged, err := repoInfo.WithTag(r.reference.String())
 			if err != nil {
 				return err
 			}
-			trustedRef, err := reference.WithDigest(repoInfo, r.digest)
+			trustedRef, err := repoInfo.WithDigest(r.digest)
 			if err != nil {
 				return err
 			}

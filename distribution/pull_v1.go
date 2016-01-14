@@ -20,7 +20,7 @@ import (
 	"github.com/docker/docker/pkg/ioutils"
 	"github.com/docker/docker/pkg/progress"
 	"github.com/docker/docker/pkg/stringid"
-	"github.com/docker/docker/reference"
+	"github.com/docker/docker/references"
 	"github.com/docker/docker/registry"
 	"golang.org/x/net/context"
 )
@@ -33,8 +33,8 @@ type v1Puller struct {
 	session     *registry.Session
 }
 
-func (p *v1Puller) Pull(ctx context.Context, ref reference.Named) error {
-	if _, isCanonical := ref.(reference.Canonical); isCanonical {
+func (p *v1Puller) Pull(ctx context.Context, ref references.BoundNamed) error {
+	if _, isCanonical := ref.(references.BoundCanonical); isCanonical {
 		// Allowing fallback, because HTTPS v1 is before HTTP v2
 		return fallbackError{err: registry.ErrNoSupport{Err: errors.New("Cannot pull by digest with v1 registry")}}
 	}
@@ -70,7 +70,7 @@ func (p *v1Puller) Pull(ctx context.Context, ref reference.Named) error {
 	return nil
 }
 
-func (p *v1Puller) pullRepository(ctx context.Context, ref reference.Named) error {
+func (p *v1Puller) pullRepository(ctx context.Context, ref references.BoundNamed) error {
 	progress.Message(p.config.ProgressOutput, "", "Pulling repository "+p.repoInfo.FullName())
 
 	repoData, err := p.session.GetRepositoryData(p.repoInfo)
@@ -84,7 +84,7 @@ func (p *v1Puller) pullRepository(ctx context.Context, ref reference.Named) erro
 
 	logrus.Debugf("Retrieving the tag list")
 	var tagsList map[string]string
-	tagged, isTagged := ref.(reference.NamedTagged)
+	tagged, isTagged := ref.(references.BoundTagged)
 	if !isTagged {
 		tagsList, err = p.session.GetRemoteTags(repoData.Endpoints, p.repoInfo)
 	} else {
@@ -131,7 +131,7 @@ func (p *v1Puller) downloadImage(ctx context.Context, repoData *registry.Reposit
 		return nil
 	}
 
-	localNameRef, err := reference.WithTag(p.repoInfo, img.Tag)
+	localNameRef, err := p.repoInfo.WithTag(img.Tag)
 	if err != nil {
 		retErr := fmt.Errorf("Image (id: %s) has invalid tag: %s", img.ID, img.Tag)
 		logrus.Debug(retErr.Error())
@@ -178,7 +178,7 @@ func (p *v1Puller) downloadImage(ctx context.Context, repoData *registry.Reposit
 	return nil
 }
 
-func (p *v1Puller) pullImage(ctx context.Context, v1ID, endpoint string, localNameRef reference.Named, layersDownloaded *bool) (err error) {
+func (p *v1Puller) pullImage(ctx context.Context, v1ID, endpoint string, localNameRef references.BoundNamed, layersDownloaded *bool) (err error) {
 	var history []string
 	history, err = p.session.GetRemoteHistory(v1ID, endpoint)
 	if err != nil {

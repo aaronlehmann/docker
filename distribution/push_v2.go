@@ -11,6 +11,7 @@ import (
 	"github.com/docker/distribution/digest"
 	"github.com/docker/distribution/manifest/schema1"
 	"github.com/docker/distribution/manifest/schema2"
+	"github.com/docker/distribution/reference"
 	"github.com/docker/distribution/registry/client"
 	"github.com/docker/docker/distribution/metadata"
 	"github.com/docker/docker/distribution/xfer"
@@ -19,7 +20,7 @@ import (
 	"github.com/docker/docker/pkg/ioutils"
 	"github.com/docker/docker/pkg/progress"
 	"github.com/docker/docker/pkg/stringid"
-	"github.com/docker/docker/reference"
+	"github.com/docker/docker/references"
 	"github.com/docker/docker/registry"
 	"golang.org/x/net/context"
 )
@@ -35,7 +36,7 @@ type PushResult struct {
 
 type v2Pusher struct {
 	blobSumService *metadata.BlobSumService
-	ref            reference.Named
+	ref            references.BoundNamed
 	endpoint       registry.APIEndpoint
 	repoInfo       *registry.RepositoryInfo
 	config         *ImagePushConfig
@@ -75,7 +76,7 @@ func (p *v2Pusher) Push(ctx context.Context) (err error) {
 }
 
 func (p *v2Pusher) pushV2Repository(ctx context.Context) (err error) {
-	if namedTagged, isNamedTagged := p.ref.(reference.NamedTagged); isNamedTagged {
+	if namedTagged, isNamedTagged := p.ref.(references.BoundTagged); isNamedTagged {
 		imageID, err := p.config.ReferenceStore.Get(p.ref)
 		if err != nil {
 			return fmt.Errorf("tag does not exist: %s", p.ref.String())
@@ -84,14 +85,14 @@ func (p *v2Pusher) pushV2Repository(ctx context.Context) (err error) {
 		return p.pushV2Tag(ctx, namedTagged, imageID)
 	}
 
-	if !reference.IsNameOnly(p.ref) {
+	if !reference.NamedOnly(p.ref) {
 		return errors.New("cannot push a digest reference")
 	}
 
 	// Pull all tags
 	pushed := 0
 	for _, association := range p.config.ReferenceStore.ReferencesByName(p.ref) {
-		if namedTagged, isNamedTagged := association.Ref.(reference.NamedTagged); isNamedTagged {
+		if namedTagged, isNamedTagged := association.Ref.(references.BoundTagged); isNamedTagged {
 			pushed++
 			if err := p.pushV2Tag(ctx, namedTagged, association.ImageID); err != nil {
 				return err
@@ -106,7 +107,7 @@ func (p *v2Pusher) pushV2Repository(ctx context.Context) (err error) {
 	return nil
 }
 
-func (p *v2Pusher) pushV2Tag(ctx context.Context, ref reference.NamedTagged, imageID image.ID) error {
+func (p *v2Pusher) pushV2Tag(ctx context.Context, ref references.BoundTagged, imageID image.ID) error {
 	logrus.Debugf("Pushing repository: %s", ref.String())
 
 	img, err := p.config.ImageStore.Get(imageID)

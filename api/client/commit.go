@@ -8,7 +8,7 @@ import (
 	Cli "github.com/docker/docker/cli"
 	"github.com/docker/docker/opts"
 	flag "github.com/docker/docker/pkg/mflag"
-	"github.com/docker/docker/reference"
+	"github.com/docker/docker/references"
 	"github.com/docker/engine-api/types"
 	"github.com/docker/engine-api/types/container"
 )
@@ -39,7 +39,7 @@ func (cli *DockerCli) CmdCommit(args ...string) error {
 
 	//Check if the given image name can be resolved
 	if repositoryAndTag != "" {
-		ref, err := reference.ParseNamed(repositoryAndTag)
+		ref, err := references.ParseAndBindDefault(repositoryAndTag)
 		if err != nil {
 			return err
 		}
@@ -47,9 +47,9 @@ func (cli *DockerCli) CmdCommit(args ...string) error {
 		repositoryName = ref.Name()
 
 		switch x := ref.(type) {
-		case reference.Canonical:
+		case references.BoundCanonical:
 			return errors.New("cannot commit to digest reference")
-		case reference.NamedTagged:
+		case references.BoundTagged:
 			tag = x.Tag()
 		}
 	}

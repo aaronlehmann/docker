@@ -18,7 +18,7 @@ import (
 	"github.com/docker/docker/pkg/idtools"
 	"github.com/docker/docker/pkg/ioutils"
 	"github.com/docker/docker/pkg/urlutil"
-	"github.com/docker/docker/reference"
+	"github.com/docker/docker/references"
 	"github.com/docker/docker/registry"
 	"github.com/docker/engine-api/types"
 	"github.com/docker/engine-api/types/container"
@@ -37,11 +37,11 @@ var _ builder.Backend = Docker{}
 
 // Pull tells Docker to pull image referenced by `name`.
 func (d Docker) Pull(name string) (builder.Image, error) {
-	ref, err := reference.ParseNamed(name)
+	ref, err := references.ParseAndBindDefault(name)
 	if err != nil {
 		return nil, err
 	}
-	ref = reference.WithDefaultTag(ref)
+	ref = ref.WithDefaultTag()
 
 	pullRegistryAuth := &types.AuthConfig{}
 	if len(d.AuthConfigs) > 0 {

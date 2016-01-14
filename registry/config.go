@@ -9,7 +9,7 @@ import (
 
 	"github.com/docker/docker/opts"
 	flag "github.com/docker/docker/pkg/mflag"
-	"github.com/docker/docker/reference"
+	"github.com/docker/docker/references"
 	registrytypes "github.com/docker/engine-api/types/registry"
 )
 
@@ -180,8 +180,8 @@ func ValidateMirror(val string) (string, error) {
 
 // ValidateIndexName validates an index name.
 func ValidateIndexName(val string) (string, error) {
-	if val == reference.LegacyDefaultHostname {
-		val = reference.DefaultHostname
+	if val == references.DefaultRefCtx.LegacyDefaultHostname() {
+		val = references.DefaultRefCtx.DefaultHostname()
 	}
 	if strings.HasPrefix(val, "-") || strings.HasSuffix(val, "-") {
 		return "", fmt.Errorf("Invalid index name (%s). Cannot begin or end with a hyphen.", val)
@@ -230,7 +230,7 @@ func GetAuthConfigKey(index *registrytypes.IndexInfo) string {
 }
 
 // newRepositoryInfo validates and breaks down a repository name into a RepositoryInfo
-func newRepositoryInfo(config *registrytypes.ServiceConfig, name reference.Named) (*RepositoryInfo, error) {
+func newRepositoryInfo(config *registrytypes.ServiceConfig, name references.BoundNamed) (*RepositoryInfo, error) {
 	index, err := newIndexInfo(config, name.Hostname())
 	if err != nil {
 		return nil, err
@@ -241,7 +241,7 @@ func newRepositoryInfo(config *registrytypes.ServiceConfig, name reference.Named
 
 // ParseRepositoryInfo performs the breakdown of a repository name into a RepositoryInfo, but
 // lacks registry configuration.
-func ParseRepositoryInfo(reposName reference.Named) (*RepositoryInfo, error) {
+func ParseRepositoryInfo(reposName references.BoundNamed) (*RepositoryInfo, error) {
 	return newRepositoryInfo(emptyServiceConfig, reposName)
 }
 

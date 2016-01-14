@@ -7,7 +7,7 @@ import (
 
 	Cli "github.com/docker/docker/cli"
 	"github.com/docker/docker/pkg/jsonmessage"
-	"github.com/docker/docker/reference"
+	"github.com/docker/docker/references"
 	"github.com/docker/docker/registry"
 	runconfigopts "github.com/docker/docker/runconfig/opts"
 	"github.com/docker/engine-api/client"
@@ -21,16 +21,16 @@ func (cli *DockerCli) pullImage(image string) error {
 }
 
 func (cli *DockerCli) pullImageCustomOut(image string, out io.Writer) error {
-	ref, err := reference.ParseNamed(image)
+	ref, err := references.ParseAndBindDefault(image)
 	if err != nil {
 		return err
 	}
 
 	var tag string
-	switch x := reference.WithDefaultTag(ref).(type) {
-	case reference.Canonical:
+	switch x := ref.WithDefaultTag().(type) {
+	case references.BoundCanonical:
 		tag = x.Digest().String()
-	case reference.NamedTagged:
+	case references.BoundTagged:
 		tag = x.Tag()
 	}
 
@@ -90,15 +90,15 @@ func (cli *DockerCli) createContainer(config *container.Config, hostConfig *cont
 		defer containerIDFile.Close()
 	}
 
-	ref, err := reference.ParseNamed(config.Image)
+	ref, err := references.ParseAndBindDefault(config.Image)
 	if err != nil {
 		return nil, err
 	}
-	ref = reference.WithDefaultTag(ref)
+	ref = ref.WithDefaultTag()
 
-	var trustedRef reference.Canonical
+	var trustedRef references.BoundCanonical
 
-	if ref, ok := ref.(reference.NamedTagged); ok && isTrusted() {
+	if ref, ok := ref.(references.BoundTagged); ok && isTrusted() {
 		var err error
 		trustedRef, err = cli.trustedReference(ref)
 		if err != nil {
@@ -119,7 +119,7 @@ func (cli *DockerCli) createContainer(config *container.Config, hostConfig *cont
 			if err = cli.pullImageCustomOut(config.Image, cli.err); err != nil {
 				return nil, err
 			}
-			if ref, ok := ref.(reference.NamedTagged); ok && trustedRef != nil {
+			if ref, ok := ref.(references.BoundTagged); ok && trustedRef != nil {
 				if err := cli.tagTrusted(trustedRef, ref); err != nil {
 					return nil, err
 				}

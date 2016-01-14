@@ -1,7 +1,7 @@
 package registry
 
 import (
-	"github.com/docker/docker/reference"
+	"github.com/docker/docker/references"
 	registrytypes "github.com/docker/engine-api/types/registry"
 )
 
@@ -60,7 +60,7 @@ const (
 
 // RepositoryInfo describes a repository
 type RepositoryInfo struct {
-	reference.Named
+	references.BoundNamed
 	// Index points to registry information
 	Index *registrytypes.IndexInfo
 	// Official indicates whether the repository is considered official.

@@ -7,7 +7,7 @@ import (
 
 	"github.com/docker/docker/image"
 	"github.com/docker/docker/layer"
-	"github.com/docker/docker/reference"
+	"github.com/docker/docker/references"
 	"github.com/docker/engine-api/types"
 	"github.com/docker/engine-api/types/filters"
 )
@@ -68,9 +68,9 @@ func (daemon *Daemon) Images(filterArgs, filter string, all bool) ([]*types.Imag
 
 	var filterTagged bool
 	if filter != "" {
-		filterRef, err := reference.ParseNamed(filter)
+		filterRef, err := references.ParseAndBindDefault(filter)
 		if err == nil { // parse error means wildcard repo
-			if _, ok := filterRef.(reference.NamedTagged); ok {
+			if _, ok := filterRef.(references.BoundTagged); ok {
 				filterTagged = true
 			}
 		}
@@ -115,10 +115,10 @@ func (daemon *Daemon) Images(filterArgs, filter string, all bool) ([]*types.Imag
 					continue
 				}
 			}
-			if _, ok := ref.(reference.Canonical); ok {
+			if _, ok := ref.(references.BoundCanonical); ok {
 				newImage.RepoDigests = append(newImage.RepoDigests, ref.String())
 			}
-			if _, ok := ref.(reference.NamedTagged); ok {
+			if _, ok := ref.(references.BoundTagged); ok {
 				newImage.RepoTags = append(newImage.RepoTags, ref.String())
 			}
 		}

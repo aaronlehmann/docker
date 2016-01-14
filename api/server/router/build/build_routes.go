@@ -21,7 +21,7 @@ import (
 	"github.com/docker/docker/pkg/ioutils"
 	"github.com/docker/docker/pkg/progress"
 	"github.com/docker/docker/pkg/streamformatter"
-	"github.com/docker/docker/reference"
+	"github.com/docker/docker/references"
 	"github.com/docker/docker/utils"
 	"github.com/docker/engine-api/types"
 	"github.com/docker/engine-api/types/container"
@@ -32,9 +32,9 @@ import (
 // sanitizeRepoAndTags parses the raw "t" parameter received from the client
 // to a slice of repoAndTag.
 // It also validates each repoName and tag.
-func sanitizeRepoAndTags(names []string) ([]reference.Named, error) {
+func sanitizeRepoAndTags(names []string) ([]references.BoundNamed, error) {
 	var (
-		repoAndTags []reference.Named
+		repoAndTags []references.BoundNamed
 		// This map is used for deduplicating the "-t" parameter.
 		uniqNames = make(map[string]struct{})
 	)
@@ -43,19 +43,15 @@ func sanitizeRepoAndTags(names []string) ([]reference.Named, error) {
 			continue
 		}
 
-		ref, err := reference.ParseNamed(repo)
+		ref, err := references.ParseAndBindDefault(repo)
 		if err != nil {
 			return nil, err
 		}
 
-		ref = reference.WithDefaultTag(ref)
+		ref = ref.WithDefaultTag()
 
-		if _, isCanonical := ref.(reference.Canonical); isCanonical {
+		if _, isCanonical := ref.(references.BoundCanonical); isCanonical {
 			return nil, errors.New("build tag cannot contain a digest")
-		}
-
-		if _, isTagged := ref.(reference.NamedTagged); !isTagged {
-			ref, err = reference.WithTag(ref, reference.DefaultTag)
 		}
 
 		nameWithTag := ref.String()

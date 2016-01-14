@@ -15,6 +15,7 @@ import (
 	"github.com/docker/distribution/manifest/manifestlist"
 	"github.com/docker/distribution/manifest/schema1"
 	"github.com/docker/distribution/manifest/schema2"
+	"github.com/docker/distribution/reference"
 	"github.com/docker/distribution/registry/api/errcode"
 	"github.com/docker/distribution/registry/client"
 	"github.com/docker/docker/distribution/metadata"
@@ -25,7 +26,7 @@ import (
 	"github.com/docker/docker/pkg/ioutils"
 	"github.com/docker/docker/pkg/progress"
 	"github.com/docker/docker/pkg/stringid"
-	"github.com/docker/docker/reference"
+	"github.com/docker/docker/references"
 	"github.com/docker/docker/registry"
 	"golang.org/x/net/context"
 )
@@ -43,7 +44,7 @@ type v2Puller struct {
 	confirmedV2 bool
 }
 
-func (p *v2Puller) Pull(ctx context.Context, ref reference.Named) (err error) {
+func (p *v2Puller) Pull(ctx context.Context, ref references.BoundNamed) (err error) {
 	// TODO(tiborvass): was ReceiveTimeout
 	p.repo, p.confirmedV2, err = NewV2Repository(ctx, p.repoInfo, p.endpoint, p.config.MetaHeaders, p.config.AuthConfig, "pull")
 	if err != nil {
@@ -63,9 +64,9 @@ func (p *v2Puller) Pull(ctx context.Context, ref reference.Named) (err error) {
 	return err
 }
 
-func (p *v2Puller) pullV2Repository(ctx context.Context, ref reference.Named) (err error) {
+func (p *v2Puller) pullV2Repository(ctx context.Context, ref references.BoundNamed) (err error) {
 	var layersDownloaded bool
-	if !reference.IsNameOnly(ref) {
+	if !reference.NamedOnly(ref) {
 		layersDownloaded, err = p.pullV2Tag(ctx, ref)
 		if err != nil {
 			return err
@@ -84,7 +85,7 @@ func (p *v2Puller) pullV2Repository(ctx context.Context, ref reference.Named) (e
 		p.confirmedV2 = true
 
 		for _, tag := range tags {
-			tagRef, err := reference.WithTag(ref, tag)
+			tagRef, err := ref.WithTag(tag)
 			if err != nil {
 				return err
 			}
@@ -199,7 +200,7 @@ func (ld *v2LayerDescriptor) Registered(diffID layer.DiffID) {
 	ld.blobSumService.Add(diffID, ld.digest)
 }
 
-func (p *v2Puller) pullV2Tag(ctx context.Context, ref reference.Named) (tagUpdated bool, err error) {
+func (p *v2Puller) pullV2Tag(ctx context.Context, ref references.BoundNamed) (tagUpdated bool, err error) {
 	manSvc, err := p.repo.Manifests(ctx)
 	if err != nil {
 		return false, err
@@ -209,7 +210,7 @@ func (p *v2Puller) pullV2Tag(ctx context.Context, ref reference.Named) (tagUpdat
 		manifest    distribution.Manifest
 		tagOrDigest string // Used for logging/progress only
 	)
-	if tagged, isTagged := ref.(reference.NamedTagged); isTagged {
+	if tagged, isTagged := ref.(references.BoundTagged); isTagged {
 		// NOTE: not using TagService.Get, since it uses HEAD requests
 		// against the manifests endpoint, which are not supported by
 		// all registry versions.
@@ -218,7 +219,7 @@ func (p *v2Puller) pullV2Tag(ctx context.Context, ref reference.Named) (tagUpdat
 			return false, allowV1Fallback(err)
 		}
 		tagOrDigest = tagged.Tag()
-	} else if digested, isDigested := ref.(reference.Canonical); isDigested {
+	} else if digested, isDigested := ref.(references.BoundCanonical); isDigested {
 		manifest, err = manSvc.Get(ctx, digested.Digest())
 		if err != nil {
 			return false, err
@@ -271,11 +272,11 @@ func (p *v2Puller) pullV2Tag(ctx context.Context, ref reference.Named) (tagUpdat
 		if oldTagImageID == imageID {
 			return false, nil
 		}
-	} else if err != reference.ErrDoesNotExist {
+	} else if err != references.ErrDoesNotExist {
 		return false, err
 	}
 
-	if canonical, ok := ref.(reference.Canonical); ok {
+	if canonical, ok := ref.(references.BoundCanonical); ok {
 		if err = p.config.ReferenceStore.AddDigest(canonical, imageID, true); err != nil {
 			return false, err
 		}
@@ -286,7 +287,7 @@ func (p *v2Puller) pullV2Tag(ctx context.Context, ref reference.Named) (tagUpdat
 	return true, nil
 }
 
-func (p *v2Puller) pullSchema1(ctx context.Context, ref reference.Named, unverifiedManifest *schema1.SignedManifest) (imageID image.ID, manifestDigest digest.Digest, err error) {
+func (p *v2Puller) pullSchema1(ctx context.Context, ref references.BoundNamed, unverifiedManifest *schema1.SignedManifest) (imageID image.ID, manifestDigest digest.Digest, err error) {
 	var verifiedManifest *schema1.Manifest
 	verifiedManifest, err = verifySchema1Manifest(unverifiedManifest, ref)
 	if err != nil {
@@ -362,7 +363,7 @@ func (p *v2Puller) pullSchema1(ctx context.Context, ref reference.Named, unverif
 	return imageID, manifestDigest, nil
 }
 
-func (p *v2Puller) pullSchema2(ctx context.Context, ref reference.Named, mfst *schema2.DeserializedManifest) (imageID image.ID, manifestDigest digest.Digest, err error) {
+func (p *v2Puller) pullSchema2(ctx context.Context, ref references.BoundNamed, mfst *schema2.DeserializedManifest) (imageID image.ID, manifestDigest digest.Digest, err error) {
 	manifestDigest, err = schema2ManifestDigest(ref, mfst)
 	if err != nil {
 		return "", "", err
@@ -490,7 +491,7 @@ func receiveConfig(configChan <-chan []byte, errChan <-chan error) ([]byte, imag
 
 // pullManifestList handles "manifest lists" which point to various
 // platform-specifc manifests.
-func (p *v2Puller) pullManifestList(ctx context.Context, ref reference.Named, mfstList *manifestlist.DeserializedManifestList) (imageID image.ID, manifestListDigest digest.Digest, err error) {
+func (p *v2Puller) pullManifestList(ctx context.Context, ref references.BoundNamed, mfstList *manifestlist.DeserializedManifestList) (imageID image.ID, manifestListDigest digest.Digest, err error) {
 	manifestListDigest, err = schema2ManifestDigest(ref, mfstList)
 	if err != nil {
 		return "", "", err
@@ -521,7 +522,7 @@ func (p *v2Puller) pullManifestList(ctx context.Context, ref reference.Named, mf
 		return "", "", err
 	}
 
-	manifestRef, err := reference.WithDigest(ref, manifestDigest)
+	manifestRef, err := ref.WithDigest(manifestDigest)
 	if err != nil {
 		return "", "", err
 	}
@@ -570,14 +571,14 @@ func (p *v2Puller) pullSchema2ImageConfig(ctx context.Context, dgst digest.Diges
 
 // schema2ManifestDigest computes the manifest digest, and, if pulling by
 // digest, ensures that it matches the requested digest.
-func schema2ManifestDigest(ref reference.Named, mfst distribution.Manifest) (digest.Digest, error) {
+func schema2ManifestDigest(ref references.BoundNamed, mfst distribution.Manifest) (digest.Digest, error) {
 	_, canonical, err := mfst.Payload()
 	if err != nil {
 		return "", err
 	}
 
 	// If pull by digest, then verify the manifest digest.
-	if digested, isDigested := ref.(reference.Canonical); isDigested {
+	if digested, isDigested := ref.(references.BoundCanonical); isDigested {
 		verifier, err := digest.NewDigestVerifier(digested.Digest())
 		if err != nil {
 			return "", err
@@ -617,11 +618,11 @@ func allowV1Fallback(err error) error {
 	return err
 }
 
-func verifySchema1Manifest(signedManifest *schema1.SignedManifest, ref reference.Named) (m *schema1.Manifest, err error) {
+func verifySchema1Manifest(signedManifest *schema1.SignedManifest, ref references.BoundNamed) (m *schema1.Manifest, err error) {
 	// If pull by digest, then verify the manifest digest. NOTE: It is
 	// important to do this first, before any other content validation. If the
 	// digest cannot be verified, don't even bother with those other things.
-	if digested, isCanonical := ref.(reference.Canonical); isCanonical {
+	if digested, isCanonical := ref.(references.BoundCanonical); isCanonical {
 		verifier, err := digest.NewDigestVerifier(digested.Digest())
 		if err != nil {
 			return nil, err

@@ -7,7 +7,7 @@ import (
 	Cli "github.com/docker/docker/cli"
 	"github.com/docker/docker/pkg/jsonmessage"
 	flag "github.com/docker/docker/pkg/mflag"
-	"github.com/docker/docker/reference"
+	"github.com/docker/docker/references"
 	"github.com/docker/docker/registry"
 	"github.com/docker/engine-api/client"
 	"github.com/docker/engine-api/types"
@@ -23,16 +23,16 @@ func (cli *DockerCli) CmdPush(args ...string) error {
 
 	cmd.ParseFlags(args, true)
 
-	ref, err := reference.ParseNamed(cmd.Arg(0))
+	ref, err := references.ParseAndBindDefault(cmd.Arg(0))
 	if err != nil {
 		return err
 	}
 
 	var tag string
 	switch x := ref.(type) {
-	case reference.Canonical:
+	case references.BoundCanonical:
 		return errors.New("cannot push a digest reference")
-	case reference.NamedTagged:
+	case references.BoundTagged:
 		tag = x.Tag()
 	}
 

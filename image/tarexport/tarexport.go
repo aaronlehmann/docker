@@ -3,7 +3,7 @@ package tarexport
 import (
 	"github.com/docker/docker/image"
 	"github.com/docker/docker/layer"
-	"github.com/docker/docker/reference"
+	"github.com/docker/docker/references"
 )
 
 const (
@@ -23,11 +23,11 @@ type manifestItem struct {
 type tarexporter struct {
 	is image.Store
 	ls layer.Store
-	rs reference.Store
+	rs references.Store
 }
 
 // NewTarExporter returns new ImageExporter for tar packages
-func NewTarExporter(is image.Store, ls layer.Store, rs reference.Store) image.Exporter {
+func NewTarExporter(is image.Store, ls layer.Store, rs references.Store) image.Exporter {
 	return &tarexporter{
 		is: is,
 		ls: ls,

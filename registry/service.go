@@ -6,7 +6,7 @@ import (
 	"net/url"
 	"strings"
 
-	"github.com/docker/docker/reference"
+	"github.com/docker/docker/references"
 	"github.com/docker/engine-api/types"
 	registrytypes "github.com/docker/engine-api/types/registry"
 )
@@ -109,7 +109,7 @@ func (s *Service) Search(term string, authConfig *types.AuthConfig, headers map[
 
 // ResolveRepository splits a repository name into its components
 // and configuration of the associated registry.
-func (s *Service) ResolveRepository(name reference.Named) (*RepositoryInfo, error) {
+func (s *Service) ResolveRepository(name references.BoundNamed) (*RepositoryInfo, error) {
 	return newRepositoryInfo(s.Config, name)
 }
 
@@ -149,14 +149,14 @@ func (s *Service) tlsConfigForMirror(mirror string) (*tls.Config, error) {
 // LookupPullEndpoints creates an list of endpoints to try to pull from, in order of preference.
 // It gives preference to v2 endpoints over v1, mirrors over the actual
 // registry, and HTTPS over plain HTTP.
-func (s *Service) LookupPullEndpoints(repoName reference.Named) (endpoints []APIEndpoint, err error) {
+func (s *Service) LookupPullEndpoints(repoName references.BoundNamed) (endpoints []APIEndpoint, err error) {
 	return s.lookupEndpoints(repoName)
 }
 
 // LookupPushEndpoints creates an list of endpoints to try to push to, in order of preference.
 // It gives preference to v2 endpoints over v1, and HTTPS over plain HTTP.
 // Mirrors are not included.
-func (s *Service) LookupPushEndpoints(repoName reference.Named) (endpoints []APIEndpoint, err error) {
+func (s *Service) LookupPushEndpoints(repoName references.BoundNamed) (endpoints []APIEndpoint, err error) {
 	allEndpoints, err := s.lookupEndpoints(repoName)
 	if err == nil {
 		for _, endpoint := range allEndpoints {
@@ -168,7 +168,7 @@ func (s *Service) LookupPushEndpoints(repoName reference.Named) (endpoints []API
 	return endpoints, err
 }
 
-func (s *Service) lookupEndpoints(repoName reference.Named) (endpoints []APIEndpoint, err error) {
+func (s *Service) lookupEndpoints(repoName references.BoundNamed) (endpoints []APIEndpoint, err error) {
 	endpoints, err = s.lookupV2Endpoints(repoName)
 	if err != nil {
 		return nil, err

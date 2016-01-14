@@ -15,7 +15,7 @@ import (
 	"github.com/docker/docker/dockerversion"
 	"github.com/docker/docker/image"
 	"github.com/docker/docker/layer"
-	"github.com/docker/docker/reference"
+	"github.com/docker/docker/references"
 	containertypes "github.com/docker/engine-api/types/container"
 	// register the windows graph driver
 	"github.com/docker/docker/daemon/graphdriver/windows"
@@ -171,7 +171,7 @@ func (daemon *Daemon) conditionalUnmountOnCleanup(container *container.Container
 	}
 }
 
-func restoreCustomImage(is image.Store, ls layer.Store, rs reference.Store) error {
+func restoreCustomImage(is image.Store, ls layer.Store, rs references.Store) error {
 	type graphDriverStore interface {
 		GraphDriver() graphdriver.Driver
 	}
@@ -223,12 +223,12 @@ func restoreCustomImage(is image.Store, ls layer.Store, rs reference.Store) erro
 			History: []image.History{},
 		})
 
-		named, err := reference.ParseNamed(name)
+		named, err := references.ParseAndBindDefault(name)
 		if err != nil {
 			return err
 		}
 
-		ref, err := reference.WithTag(named, imageInfos[i].Version)
+		ref, err := named.WithTag(imageInfos[i].Version)
 		if err != nil {
 			return err
 		}

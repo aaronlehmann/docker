@@ -15,7 +15,7 @@ import (
 	"github.com/docker/docker/pkg/archive"
 	"github.com/docker/docker/pkg/chrootarchive"
 	"github.com/docker/docker/pkg/symlink"
-	"github.com/docker/docker/reference"
+	"github.com/docker/docker/references"
 )
 
 func (l *tarexporter) Load(inTar io.ReadCloser, outStream io.Writer) error {
@@ -95,11 +95,11 @@ func (l *tarexporter) Load(inTar io.ReadCloser, outStream io.Writer) error {
 		}
 
 		for _, repoTag := range m.RepoTags {
-			named, err := reference.ParseNamed(repoTag)
+			named, err := references.ParseAndBindDefault(repoTag)
 			if err != nil {
 				return err
 			}
-			ref, ok := named.(reference.NamedTagged)
+			ref, ok := named.(references.BoundTagged)
 			if !ok {
 				return fmt.Errorf("invalid tag %q", repoTag)
 			}
@@ -128,7 +128,7 @@ func (l *tarexporter) loadLayer(filename string, rootFS image.RootFS) (layer.Lay
 	return l.ls.Register(inflatedLayerData, rootFS.ChainID())
 }
 
-func (l *tarexporter) setLoadedTag(ref reference.NamedTagged, imgID image.ID, outStream io.Writer) error {
+func (l *tarexporter) setLoadedTag(ref references.BoundTagged, imgID image.ID, outStream io.Writer) error {
 	if prevID, err := l.rs.Get(ref); err == nil && prevID != imgID {
 		fmt.Fprintf(outStream, "The image %s already exists, renaming the old one with ID %s to empty string\n", ref.String(), string(prevID)) // todo: this message is wrong in case of multiple tags
 	}
@@ -181,11 +181,11 @@ func (l *tarexporter) legacyLoad(tmpDir string, outStream io.Writer) error {
 			if !ok {
 				return fmt.Errorf("invalid target ID: %v", oldID)
 			}
-			named, err := reference.WithName(name)
+			named, err := references.ParseAndBindDefault(name)
 			if err != nil {
 				return err
 			}
-			ref, err := reference.WithTag(named, tag)
+			ref, err := named.WithTag(tag)
 			if err != nil {
 				return err
 			}

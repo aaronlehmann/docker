@@ -2,18 +2,20 @@ package daemon
 
 import (
 	"encoding/json"
+	"errors"
 	"fmt"
 	"runtime"
 	"strings"
 	"time"
 
+	"github.com/docker/distribution/reference"
 	"github.com/docker/docker/container"
 	"github.com/docker/docker/dockerversion"
 	"github.com/docker/docker/image"
 	"github.com/docker/docker/layer"
 	"github.com/docker/docker/pkg/archive"
 	"github.com/docker/docker/pkg/ioutils"
-	"github.com/docker/docker/reference"
+	"github.com/docker/docker/references"
 	"github.com/docker/engine-api/types"
 	containertypes "github.com/docker/engine-api/types/container"
 	"github.com/docker/go-connections/nat"
@@ -190,12 +192,15 @@ func (daemon *Daemon) Commit(name string, c *types.ContainerCommitConfig) (strin
 	}
 
 	if c.Repo != "" {
-		newTag, err := reference.WithName(c.Repo) // todo: should move this to API layer
+		newTag, err := references.ParseAndBindDefault(c.Repo) // todo: should move this to API layer
 		if err != nil {
 			return "", err
 		}
+		if !reference.NamedOnly(newTag) {
+			return "", errors.New("repo must be a name only")
+		}
 		if c.Tag != "" {
-			if newTag, err = reference.WithTag(newTag, c.Tag); err != nil {
+			if newTag, err = newTag.WithTag(c.Tag); err != nil {
 				return "", err
 			}
 		}

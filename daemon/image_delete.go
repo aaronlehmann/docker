@@ -8,7 +8,7 @@ import (
 	derr "github.com/docker/docker/errors"
 	"github.com/docker/docker/image"
 	"github.com/docker/docker/pkg/stringid"
-	"github.com/docker/docker/reference"
+	"github.com/docker/docker/references"
 	"github.com/docker/engine-api/types"
 )
 
@@ -86,7 +86,7 @@ func (daemon *Daemon) ImageDelete(imageRef string, force, prune bool) ([]types.I
 			}
 		}
 
-		parsedRef, err := reference.ParseNamed(imageRef)
+		parsedRef, err := references.ParseAndBindDefault(imageRef)
 		if err != nil {
 			return nil, err
 		}
@@ -106,10 +106,10 @@ func (daemon *Daemon) ImageDelete(imageRef string, force, prune bool) ([]types.I
 		// If this is a tag reference and all the remaining references
 		// to this image are digest references, delete the remaining
 		// references so that they don't prevent removal of the image.
-		if _, isCanonical := parsedRef.(reference.Canonical); !isCanonical {
+		if _, isCanonical := parsedRef.(references.BoundCanonical); !isCanonical {
 			foundTagRef := false
 			for _, repoRef := range repoRefs {
-				if _, repoRefIsCanonical := repoRef.(reference.Canonical); !repoRefIsCanonical {
+				if _, repoRefIsCanonical := repoRef.(references.BoundCanonical); !repoRefIsCanonical {
 					foundTagRef = true
 					break
 				}
@@ -123,7 +123,7 @@ func (daemon *Daemon) ImageDelete(imageRef string, force, prune bool) ([]types.I
 					untaggedRecord := types.ImageDelete{Untagged: repoRef.String()}
 					records = append(records, untaggedRecord)
 				}
-				repoRefs = []reference.Named{}
+				repoRefs = []references.BoundNamed{}
 			}
 		}
 
@@ -193,8 +193,8 @@ func (daemon *Daemon) getContainerUsingImage(imageID image.ID) *container.Contai
 // repositoryRef must not be an image ID but a repository name followed by an
 // optional tag or digest reference. If tag or digest is omitted, the default
 // tag is used. Returns the resolved image reference and an error.
-func (daemon *Daemon) removeImageRef(ref reference.Named) (reference.Named, error) {
-	ref = reference.WithDefaultTag(ref)
+func (daemon *Daemon) removeImageRef(ref references.BoundNamed) (references.BoundNamed, error) {
+	ref = ref.WithDefaultTag()
 	// Ignore the boolean value returned, as far as we're concerned, this
 	// is an idempotent operation and it's okay if the reference didn't
 	// exist in the first place.

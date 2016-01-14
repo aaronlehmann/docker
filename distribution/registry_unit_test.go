@@ -8,7 +8,7 @@ import (
 	"testing"
 
 	"github.com/Sirupsen/logrus"
-	"github.com/docker/docker/reference"
+	"github.com/docker/docker/references"
 	"github.com/docker/docker/registry"
 	"github.com/docker/docker/utils"
 	"github.com/docker/engine-api/types"
@@ -49,9 +49,9 @@ func TestTokenPassThru(t *testing.T) {
 		TLSConfig:    nil,
 		//VersionHeader: "verheader",
 	}
-	n, _ := reference.ParseNamed("testremotename")
+	n, _ := references.ParseAndBindDefault("testremotename")
 	repoInfo := &registry.RepositoryInfo{
-		Named: n,
+		BoundNamed: n,
 		Index: &registrytypes.IndexInfo{
 			Name:     "testrepo",
 			Mirrors:  nil,
@@ -77,7 +77,7 @@ func TestTokenPassThru(t *testing.T) {
 
 	logrus.Debug("About to pull")
 	// We expect it to fail, since we haven't mock'd the full registry exchange in our handler above
-	tag, _ := reference.WithTag(n, "tag_goes_here")
+	tag, _ := n.WithTag("tag_goes_here")
 	_ = p.pullV2Repository(ctx, tag)
 
 	if !gotToken {

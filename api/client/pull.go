@@ -4,10 +4,11 @@ import (
 	"errors"
 	"fmt"
 
+	"github.com/docker/distribution/reference"
 	Cli "github.com/docker/docker/cli"
 	"github.com/docker/docker/pkg/jsonmessage"
 	flag "github.com/docker/docker/pkg/mflag"
-	"github.com/docker/docker/reference"
+	"github.com/docker/docker/references"
 	"github.com/docker/docker/registry"
 	"github.com/docker/engine-api/client"
 	"github.com/docker/engine-api/types"
@@ -25,24 +26,24 @@ func (cli *DockerCli) CmdPull(args ...string) error {
 	cmd.ParseFlags(args, true)
 	remote := cmd.Arg(0)
 
-	distributionRef, err := reference.ParseNamed(remote)
+	distributionRef, err := references.ParseAndBindDefault(remote)
 	if err != nil {
 		return err
 	}
-	if *allTags && !reference.IsNameOnly(distributionRef) {
+	if *allTags && !reference.NamedOnly(distributionRef) {
 		return errors.New("tag can't be used with --all-tags/-a")
 	}
 
-	if !*allTags && reference.IsNameOnly(distributionRef) {
-		distributionRef = reference.WithDefaultTag(distributionRef)
-		fmt.Fprintf(cli.out, "Using default tag: %s\n", reference.DefaultTag)
+	if !*allTags && reference.NamedOnly(distributionRef) {
+		distributionRef = distributionRef.WithDefaultTag()
+		fmt.Fprintf(cli.out, "Using default tag: %s\n", references.DefaultRefCtx.DefaultTag())
 	}
 
 	var tag string
 	switch x := distributionRef.(type) {
-	case reference.Canonical:
+	case references.BoundCanonical:
 		tag = x.Digest().String()
-	case reference.NamedTagged:
+	case references.BoundTagged:
 		tag = x.Tag()
 	}
 

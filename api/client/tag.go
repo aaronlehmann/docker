@@ -5,7 +5,7 @@ import (
 
 	Cli "github.com/docker/docker/cli"
 	flag "github.com/docker/docker/pkg/mflag"
-	"github.com/docker/docker/reference"
+	"github.com/docker/docker/references"
 	"github.com/docker/engine-api/types"
 )
 
@@ -19,17 +19,17 @@ func (cli *DockerCli) CmdTag(args ...string) error {
 
 	cmd.ParseFlags(args, true)
 
-	ref, err := reference.ParseNamed(cmd.Arg(1))
+	ref, err := references.ParseAndBindDefault(cmd.Arg(1))
 	if err != nil {
 		return err
 	}
 
-	if _, isCanonical := ref.(reference.Canonical); isCanonical {
+	if _, isCanonical := ref.(references.BoundCanonical); isCanonical {
 		return errors.New("refusing to create a tag with a digest reference")
 	}
 
 	var tag string
-	if tagged, isTagged := ref.(reference.NamedTagged); isTagged {
+	if tagged, isTagged := ref.(references.BoundTagged); isTagged {
 		tag = tagged.Tag()
 	}
 
