@@ -10,15 +10,16 @@ import (
 	"time"
 
 	"github.com/docker/distribution/digest"
+	"github.com/docker/distribution/reference"
 	"github.com/docker/docker/image"
 	"github.com/docker/docker/image/v1"
 	"github.com/docker/docker/layer"
 	"github.com/docker/docker/pkg/archive"
-	"github.com/docker/docker/reference"
+	"github.com/docker/docker/references"
 )
 
 type imageDescriptor struct {
-	refs   []reference.NamedTagged
+	refs   []references.BoundTagged
 	layers []string
 }
 
@@ -41,20 +42,20 @@ func (l *tarexporter) Save(names []string, outStream io.Writer) error {
 func (l *tarexporter) parseNames(names []string) (map[image.ID]*imageDescriptor, error) {
 	imgDescr := make(map[image.ID]*imageDescriptor)
 
-	addAssoc := func(id image.ID, ref reference.Named) {
+	addAssoc := func(id image.ID, ref references.BoundNamed) {
 		if _, ok := imgDescr[id]; !ok {
 			imgDescr[id] = &imageDescriptor{}
 		}
 
 		if ref != nil {
-			var tagged reference.NamedTagged
-			if _, ok := ref.(reference.Canonical); ok {
+			var tagged references.BoundTagged
+			if _, ok := ref.(references.BoundCanonical); ok {
 				return
 			}
 			var ok bool
-			if tagged, ok = ref.(reference.NamedTagged); !ok {
+			if tagged, ok = ref.(references.BoundTagged); !ok {
 				var err error
-				if tagged, err = reference.WithTag(ref, reference.DefaultTag); err != nil {
+				if tagged, err = ref.WithTag(references.DefaultRefCtx.DefaultTag()); err != nil {
 					return
 				}
 			}
@@ -69,7 +70,7 @@ func (l *tarexporter) parseNames(names []string) (map[image.ID]*imageDescriptor,
 	}
 
 	for _, name := range names {
-		ref, err := reference.ParseNamed(name)
+		ref, err := references.ParseAndBindDefault(name)
 		if err != nil {
 			return nil, err
 		}
@@ -81,7 +82,7 @@ func (l *tarexporter) parseNames(names []string) (map[image.ID]*imageDescriptor,
 			addAssoc(imgID, nil)
 			continue
 		}
-		if reference.IsNameOnly(ref) {
+		if reference.NamedOnly(ref) {
 			assocs := l.rs.ReferencesByName(ref)
 			for _, assoc := range assocs {
 				addAssoc(assoc.ImageID, assoc.Ref)

@@ -11,7 +11,7 @@ import (
 	"github.com/docker/docker/distribution/xfer"
 	"github.com/docker/docker/image"
 	"github.com/docker/docker/pkg/progress"
-	"github.com/docker/docker/reference"
+	"github.com/docker/docker/references"
 	"github.com/docker/docker/registry"
 	"github.com/docker/engine-api/types"
 	"golang.org/x/net/context"
@@ -39,7 +39,7 @@ type ImagePullConfig struct {
 	// ImageStore manages images.
 	ImageStore image.Store
 	// ReferenceStore manages tags.
-	ReferenceStore reference.Store
+	ReferenceStore references.Store
 	// DownloadManager manages concurrent pulls.
 	DownloadManager *xfer.LayerDownloadManager
 }
@@ -49,7 +49,7 @@ type Puller interface {
 	// Pull tries to pull the image referenced by `tag`
 	// Pull returns an error if any, as well as a boolean that determines whether to retry Pull on the next configured endpoint.
 	//
-	Pull(ctx context.Context, ref reference.Named) error
+	Pull(ctx context.Context, ref references.BoundNamed) error
 }
 
 // newPuller returns a Puller interface that will pull from either a v1 or v2
@@ -79,7 +79,7 @@ func newPuller(endpoint registry.APIEndpoint, repoInfo *registry.RepositoryInfo,
 
 // Pull initiates a pull operation. image is the repository name to pull, and
 // tag may be either empty, or indicate a specific tag to pull.
-func Pull(ctx context.Context, ref reference.Named, imagePullConfig *ImagePullConfig) error {
+func Pull(ctx context.Context, ref references.BoundNamed, imagePullConfig *ImagePullConfig) error {
 	// Resolve the Repository name from fqn to RepositoryInfo
 	repoInfo, err := imagePullConfig.RegistryService.ResolveRepository(ref)
 	if err != nil {

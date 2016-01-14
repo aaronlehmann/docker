@@ -1,4 +1,4 @@
-package reference
+package references
 
 import (
 	"testing"
@@ -36,14 +36,14 @@ func TestValidateReferenceName(t *testing.T) {
 	}
 
 	for _, name := range invalidRepoNames {
-		_, err := ParseNamed(name)
+		_, err := ParseAndBindDefault(name)
 		if err == nil {
 			t.Fatalf("Expected invalid repo name for %q", name)
 		}
 	}
 
 	for _, name := range validRepoNames {
-		_, err := ParseNamed(name)
+		_, err := ParseAndBindDefault(name)
 		if err != nil {
 			t.Fatalf("Error parsing repo name %s, got: %q", name, err)
 		}
@@ -75,7 +75,7 @@ func TestValidateRemoteName(t *testing.T) {
 		"dock__er/docker",
 	}
 	for _, repositoryName := range validRepositoryNames {
-		_, err := ParseNamed(repositoryName)
+		_, err := ParseAndBindDefault(repositoryName)
 		if err != nil {
 			t.Errorf("Repository name should be valid: %v. Error: %v", repositoryName, err)
 		}
@@ -113,7 +113,7 @@ func TestValidateRemoteName(t *testing.T) {
 		"this_is_not_a_valid_namespace_because_its_lenth_is_greater_than_255_this_is_not_a_valid_namespace_because_its_lenth_is_greater_than_255_this_is_not_a_valid_namespace_because_its_lenth_is_greater_than_255_this_is_not_a_valid_namespace_because_its_lenth_is_greater_than_255/docker",
 	}
 	for _, repositoryName := range invalidRepositoryNames {
-		if _, err := ParseNamed(repositoryName); err == nil {
+		if _, err := ParseAndBindDefault(repositoryName); err == nil {
 			t.Errorf("Repository name should be invalid: %v", repositoryName)
 		}
 	}
@@ -210,14 +210,9 @@ func TestParseRepositoryInfo(t *testing.T) {
 			refStrings = append(refStrings, tcase.AmbiguousName)
 		}
 
-		var refs []Named
+		var refs []BoundNamed
 		for _, r := range refStrings {
-			named, err := ParseNamed(r)
-			if err != nil {
-				t.Fatal(err)
-			}
-			refs = append(refs, named)
-			named, err = WithName(r)
+			named, err := ParseAndBindDefault(r)
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -243,14 +238,14 @@ func TestParseRepositoryInfo(t *testing.T) {
 }
 
 func TestParseReferenceWithTagAndDigest(t *testing.T) {
-	ref, err := ParseNamed("busybox:latest@sha256:86e0e091d0da6bde2456dbb48306f3956bbeb2eae1b5b9a43045843f69fe4aaa")
+	ref, err := ParseAndBindDefault("busybox:latest@sha256:86e0e091d0da6bde2456dbb48306f3956bbeb2eae1b5b9a43045843f69fe4aaa")
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, isTagged := ref.(NamedTagged); isTagged {
+	if _, isTagged := ref.(BoundTagged); isTagged {
 		t.Fatalf("Reference from %q should not support tag", ref)
 	}
-	if _, isCanonical := ref.(Canonical); !isCanonical {
+	if _, isCanonical := ref.(BoundCanonical); !isCanonical {
 		t.Fatalf("Reference from %q should not support digest", ref)
 	}
 	if expected, actual := "busybox@sha256:86e0e091d0da6bde2456dbb48306f3956bbeb2eae1b5b9a43045843f69fe4aaa", ref.String(); actual != expected {
@@ -259,17 +254,17 @@ func TestParseReferenceWithTagAndDigest(t *testing.T) {
 }
 
 func TestInvalidReferenceComponents(t *testing.T) {
-	if _, err := WithName("-foo"); err == nil {
-		t.Fatal("Expected WithName to detect invalid name")
+	if _, err := ParseAndBindDefault("-foo"); err == nil {
+		t.Fatal("Expected ParseAndBindDefault to detect invalid name")
 	}
-	ref, err := WithName("busybox")
+	ref, err := ParseAndBindDefault("busybox")
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err := WithTag(ref, "-foo"); err == nil {
+	if _, err := ref.WithTag("-foo"); err == nil {
 		t.Fatal("Expected WithName to detect invalid tag")
 	}
-	if _, err := WithDigest(ref, digest.Digest("foo")); err == nil {
+	if _, err := ref.WithDigest(digest.Digest("foo")); err == nil {
 		t.Fatal("Expected WithName to detect invalid digest")
 	}
 }

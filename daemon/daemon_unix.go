@@ -20,7 +20,7 @@ import (
 	"github.com/docker/docker/pkg/idtools"
 	"github.com/docker/docker/pkg/parsers/kernel"
 	"github.com/docker/docker/pkg/sysinfo"
-	"github.com/docker/docker/reference"
+	"github.com/docker/docker/references"
 	"github.com/docker/docker/runconfig"
 	runconfigopts "github.com/docker/docker/runconfig/opts"
 	pblkiodev "github.com/docker/engine-api/types/blkiodev"
@@ -926,7 +926,7 @@ func (daemon *Daemon) conditionalUnmountOnCleanup(container *container.Container
 	daemon.Unmount(container)
 }
 
-func restoreCustomImage(is image.Store, ls layer.Store, rs reference.Store) error {
+func restoreCustomImage(is image.Store, ls layer.Store, rs references.Store) error {
 	// Unix has no custom images to register
 	return nil
 }

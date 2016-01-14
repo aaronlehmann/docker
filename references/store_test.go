@@ -1,4 +1,4 @@
-package reference
+package references
 
 import (
 	"bytes"
@@ -45,7 +45,7 @@ func TestLoad(t *testing.T) {
 	}
 
 	for refStr, expectedID := range saveLoadTestCases {
-		ref, err := ParseNamed(refStr)
+		ref, err := ParseAndBindDefault(refStr)
 		if err != nil {
 			t.Fatalf("failed to parse reference: %v", err)
 		}
@@ -74,11 +74,11 @@ func TestSave(t *testing.T) {
 	}
 
 	for refStr, id := range saveLoadTestCases {
-		ref, err := ParseNamed(refStr)
+		ref, err := ParseAndBindDefault(refStr)
 		if err != nil {
 			t.Fatalf("failed to parse reference: %v", err)
 		}
-		if canonical, ok := ref.(Canonical); ok {
+		if canonical, ok := ref.(BoundCanonical); ok {
 			err = store.AddDigest(canonical, id, false)
 			if err != nil {
 				t.Fatalf("could not add digest reference %s: %v", refStr, err)
@@ -120,7 +120,7 @@ func TestAddDeleteGet(t *testing.T) {
 	testImageID3 := image.ID("sha256:9655aef5fd742a1b4e1b7b163aa9f1c76c186304bf39102283d80927c916ca9e")
 
 	// Try adding a reference with no tag or digest
-	nameOnly, err := WithName("username/repo")
+	nameOnly, err := ParseAndBindDefault("username/repo")
 	if err != nil {
 		t.Fatalf("could not parse reference: %v", err)
 	}
@@ -129,7 +129,7 @@ func TestAddDeleteGet(t *testing.T) {
 	}
 
 	// Add a few references
-	ref1, err := ParseNamed("username/repo1:latest")
+	ref1, err := ParseAndBindDefault("username/repo1:latest")
 	if err != nil {
 		t.Fatalf("could not parse reference: %v", err)
 	}
@@ -137,7 +137,7 @@ func TestAddDeleteGet(t *testing.T) {
 		t.Fatalf("error adding to store: %v", err)
 	}
 
-	ref2, err := ParseNamed("username/repo1:old")
+	ref2, err := ParseAndBindDefault("username/repo1:old")
 	if err != nil {
 		t.Fatalf("could not parse reference: %v", err)
 	}
@@ -145,7 +145,7 @@ func TestAddDeleteGet(t *testing.T) {
 		t.Fatalf("error adding to store: %v", err)
 	}
 
-	ref3, err := ParseNamed("username/repo1:alias")
+	ref3, err := ParseAndBindDefault("username/repo1:alias")
 	if err != nil {
 		t.Fatalf("could not parse reference: %v", err)
 	}
@@ -153,7 +153,7 @@ func TestAddDeleteGet(t *testing.T) {
 		t.Fatalf("error adding to store: %v", err)
 	}
 
-	ref4, err := ParseNamed("username/repo2:latest")
+	ref4, err := ParseAndBindDefault("username/repo2:latest")
 	if err != nil {
 		t.Fatalf("could not parse reference: %v", err)
 	}
@@ -161,11 +161,11 @@ func TestAddDeleteGet(t *testing.T) {
 		t.Fatalf("error adding to store: %v", err)
 	}
 
-	ref5, err := ParseNamed("username/repo3@sha256:58153dfb11794fad694460162bf0cb0a4fa710cfa3f60979c177d920813e267c")
+	ref5, err := ParseAndBindDefault("username/repo3@sha256:58153dfb11794fad694460162bf0cb0a4fa710cfa3f60979c177d920813e267c")
 	if err != nil {
 		t.Fatalf("could not parse reference: %v", err)
 	}
-	if err = store.AddDigest(ref5.(Canonical), testImageID2, false); err != nil {
+	if err = store.AddDigest(ref5.(BoundCanonical), testImageID2, false); err != nil {
 		t.Fatalf("error adding to store: %v", err)
 	}
 
@@ -228,7 +228,7 @@ func TestAddDeleteGet(t *testing.T) {
 	}
 
 	// Get should return ErrDoesNotExist for a nonexistent repo
-	nonExistRepo, err := ParseNamed("username/nonexistrepo:latest")
+	nonExistRepo, err := ParseAndBindDefault("username/nonexistrepo:latest")
 	if err != nil {
 		t.Fatalf("could not parse reference: %v", err)
 	}
@@ -237,7 +237,7 @@ func TestAddDeleteGet(t *testing.T) {
 	}
 
 	// Get should return ErrDoesNotExist for a nonexistent tag
-	nonExistTag, err := ParseNamed("username/repo1:nonexist")
+	nonExistTag, err := ParseAndBindDefault("username/repo1:nonexist")
 	if err != nil {
 		t.Fatalf("could not parse reference: %v", err)
 	}
@@ -263,7 +263,7 @@ func TestAddDeleteGet(t *testing.T) {
 	}
 
 	// Check ReferencesByName
-	repoName, err := WithName("username/repo1")
+	repoName, err := ParseAndBindDefault("username/repo1")
 	if err != nil {
 		t.Fatalf("could not parse reference: %v", err)
 	}
@@ -334,7 +334,7 @@ func TestInvalidTags(t *testing.T) {
 	id := image.ID("sha256:470022b8af682154f57a2163d030eb369549549cba00edc69e1b99b46bb924d6")
 
 	// sha256 as repo name
-	ref, err := ParseNamed("sha256:abc")
+	ref, err := ParseAndBindDefault("sha256:abc")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -344,7 +344,7 @@ func TestInvalidTags(t *testing.T) {
 	}
 
 	// setting digest as a tag
-	ref, err = ParseNamed("registry@sha256:367eb40fd0330a7e464777121e39d2f5b3e8e23a1e159342e53ab05c9e4d94e6")
+	ref, err = ParseAndBindDefault("registry@sha256:367eb40fd0330a7e464777121e39d2f5b3e8e23a1e159342e53ab05c9e4d94e6")
 	if err != nil {
 		t.Fatal(err)
 	}

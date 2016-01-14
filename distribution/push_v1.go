@@ -14,7 +14,7 @@ import (
 	"github.com/docker/docker/pkg/ioutils"
 	"github.com/docker/docker/pkg/progress"
 	"github.com/docker/docker/pkg/stringid"
-	"github.com/docker/docker/reference"
+	"github.com/docker/docker/references"
 	"github.com/docker/docker/registry"
 	"golang.org/x/net/context"
 )
@@ -23,7 +23,7 @@ type v1Pusher struct {
 	ctx         context.Context
 	v1IDService *metadata.V1IDService
 	endpoint    registry.APIEndpoint
-	ref         reference.Named
+	ref         references.BoundNamed
 	repoInfo    *registry.RepositoryInfo
 	config      *ImagePushConfig
 	session     *registry.Session
@@ -141,11 +141,11 @@ func (p *v1Pusher) getImageList() (imageList []v1Image, tagsByImage map[image.ID
 	tagsByImage = make(map[image.ID][]string)
 
 	// Ignore digest references
-	if _, isCanonical := p.ref.(reference.Canonical); isCanonical {
+	if _, isCanonical := p.ref.(references.BoundCanonical); isCanonical {
 		return
 	}
 
-	tagged, isTagged := p.ref.(reference.NamedTagged)
+	tagged, isTagged := p.ref.(references.BoundTagged)
 	if isTagged {
 		// Push a specific tag
 		var imgID image.ID
@@ -169,7 +169,7 @@ func (p *v1Pusher) getImageList() (imageList []v1Image, tagsByImage map[image.ID
 
 	associations := p.config.ReferenceStore.ReferencesByName(p.ref)
 	for _, association := range associations {
-		if tagged, isTagged = association.Ref.(reference.NamedTagged); !isTagged {
+		if tagged, isTagged = association.Ref.(references.BoundTagged); !isTagged {
 			// Ignore digest references.
 			continue
 		}

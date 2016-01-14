@@ -12,7 +12,7 @@ import (
 	"github.com/docker/docker/image"
 	"github.com/docker/docker/layer"
 	"github.com/docker/docker/pkg/progress"
-	"github.com/docker/docker/reference"
+	"github.com/docker/docker/references"
 	"github.com/docker/docker/registry"
 	"github.com/docker/engine-api/types"
 	"github.com/docker/libtrust"
@@ -43,7 +43,7 @@ type ImagePushConfig struct {
 	// ImageStore manages images.
 	ImageStore image.Store
 	// ReferenceStore manages tags.
-	ReferenceStore reference.Store
+	ReferenceStore references.Store
 	// TrustKey is the private key for legacy signatures. This is typically
 	// an ephemeral key, since these signatures are no longer verified.
 	TrustKey libtrust.PrivateKey
@@ -67,7 +67,7 @@ const compressionBufSize = 32768
 // whether a v1 or v2 pusher will be created. The other parameters are passed
 // through to the underlying pusher implementation for use during the actual
 // push operation.
-func NewPusher(ref reference.Named, endpoint registry.APIEndpoint, repoInfo *registry.RepositoryInfo, imagePushConfig *ImagePushConfig) (Pusher, error) {
+func NewPusher(ref references.BoundNamed, endpoint registry.APIEndpoint, repoInfo *registry.RepositoryInfo, imagePushConfig *ImagePushConfig) (Pusher, error) {
 	switch endpoint.Version {
 	case registry.APIVersion2:
 		return &v2Pusher{
@@ -92,7 +92,7 @@ func NewPusher(ref reference.Named, endpoint registry.APIEndpoint, repoInfo *reg
 // Push initiates a push operation on the repository named localName.
 // ref is the specific variant of the image to be pushed.
 // If no tag is provided, all tags will be pushed.
-func Push(ctx context.Context, ref reference.Named, imagePushConfig *ImagePushConfig) error {
+func Push(ctx context.Context, ref references.BoundNamed, imagePushConfig *ImagePushConfig) error {
 	// FIXME: Allow to interrupt current push when new push of same image is done.
 
 	// Resolve the Repository name from fqn to RepositoryInfo

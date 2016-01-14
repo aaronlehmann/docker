@@ -28,14 +28,14 @@ import (
 	"github.com/docker/docker/pkg/progress"
 	"github.com/docker/docker/pkg/streamformatter"
 	"github.com/docker/docker/pkg/urlutil"
-	"github.com/docker/docker/reference"
+	"github.com/docker/docker/references"
 	runconfigopts "github.com/docker/docker/runconfig/opts"
 	"github.com/docker/engine-api/types"
 	"github.com/docker/engine-api/types/container"
 	"github.com/docker/go-units"
 )
 
-type translatorFunc func(reference.NamedTagged) (reference.Canonical, error)
+type translatorFunc func(references.BoundTagged) (references.BoundCanonical, error)
 
 // CmdBuild builds a new image from the source code at a given path.
 //
@@ -339,7 +339,7 @@ func validateContextDirectory(srcPath string, excludes []string) error {
 
 // validateTag checks if the given image name can be resolved.
 func validateTag(rawRepo string) (string, error) {
-	_, err := reference.ParseNamed(rawRepo)
+	_, err := references.ParseAndBindDefault(rawRepo)
 	if err != nil {
 		return "", err
 	}
@@ -556,8 +556,8 @@ var dockerfileFromLinePattern = regexp.MustCompile(`(?i)^[\s]*FROM[ \f\r\t\v]+(?
 // resolvedTag records the repository, tag, and resolved digest reference
 // from a Dockerfile rewrite.
 type resolvedTag struct {
-	digestRef reference.Canonical
-	tagRef    reference.NamedTagged
+	digestRef references.BoundCanonical
+	tagRef    references.BoundTagged
 }
 
 // rewriteDockerfileFrom rewrites the given Dockerfile by resolving images in
@@ -575,12 +575,12 @@ func rewriteDockerfileFrom(dockerfile io.Reader, translator translatorFunc) (new
 		matches := dockerfileFromLinePattern.FindStringSubmatch(line)
 		if matches != nil && matches[1] != api.NoBaseImageSpecifier {
 			// Replace the line with a resolved "FROM repo@digest"
-			ref, err := reference.ParseNamed(matches[1])
+			ref, err := references.ParseAndBindDefault(matches[1])
 			if err != nil {
 				return nil, nil, err
 			}
-			ref = reference.WithDefaultTag(ref)
-			if ref, ok := ref.(reference.NamedTagged); ok && isTrusted() {
+			ref = ref.WithDefaultTag()
+			if ref, ok := ref.(references.BoundTagged); ok && isTrusted() {
 				trustedRef, err := translator(ref)
 				if err != nil {
 					return nil, nil, err

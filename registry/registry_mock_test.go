@@ -16,7 +16,7 @@ import (
 	"time"
 
 	"github.com/docker/docker/opts"
-	"github.com/docker/docker/reference"
+	"github.com/docker/docker/references"
 	registrytypes "github.com/docker/engine-api/types/registry"
 	"github.com/gorilla/mux"
 
@@ -351,7 +351,7 @@ func handlerGetDeleteTags(w http.ResponseWriter, r *http.Request) {
 	if !requiresAuth(w, r) {
 		return
 	}
-	repositoryName, err := reference.WithName(mux.Vars(r)["repository"])
+	repositoryName, err := references.ParseAndBindDefault(mux.Vars(r)["repository"])
 	if err != nil {
 		apiError(w, "Could not parse repository", 400)
 		return
@@ -374,7 +374,7 @@ func handlerGetTag(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	vars := mux.Vars(r)
-	repositoryName, err := reference.WithName(vars["repository"])
+	repositoryName, err := references.ParseAndBindDefault(vars["repository"])
 	if err != nil {
 		apiError(w, "Could not parse repository", 400)
 		return
@@ -398,7 +398,7 @@ func handlerPutTag(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	vars := mux.Vars(r)
-	repositoryName, err := reference.WithName(vars["repository"])
+	repositoryName, err := references.ParseAndBindDefault(vars["repository"])
 	if err != nil {
 		apiError(w, "Could not parse repository", 400)
 		return

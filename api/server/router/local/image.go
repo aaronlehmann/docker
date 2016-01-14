@@ -10,12 +10,13 @@ import (
 	"strings"
 
 	"github.com/docker/distribution/digest"
+	"github.com/docker/distribution/reference"
 	"github.com/docker/docker/api/server/httputils"
 	"github.com/docker/docker/builder/dockerfile"
 	derr "github.com/docker/docker/errors"
 	"github.com/docker/docker/pkg/ioutils"
 	"github.com/docker/docker/pkg/streamformatter"
-	"github.com/docker/docker/reference"
+	"github.com/docker/docker/references"
 	"github.com/docker/docker/runconfig"
 	"github.com/docker/engine-api/types"
 	"github.com/docker/engine-api/types/container"
@@ -113,17 +114,17 @@ func (s *router) postImagesCreate(ctx context.Context, w http.ResponseWriter, r 
 		// compatibility.
 		image = strings.TrimSuffix(image, ":")
 
-		var ref reference.Named
-		ref, err = reference.ParseNamed(image)
+		var ref references.BoundNamed
+		ref, err = references.ParseAndBindDefault(image)
 		if err == nil {
 			if tag != "" {
 				// The "tag" could actually be a digest.
 				var dgst digest.Digest
 				dgst, err = digest.ParseDigest(tag)
 				if err == nil {
-					ref, err = reference.WithDigest(ref, dgst)
+					ref, err = ref.WithDigest(dgst)
 				} else {
-					ref, err = reference.WithTag(ref, tag)
+					ref, err = ref.WithTag(tag)
 				}
 			}
 			if err == nil {
@@ -138,20 +139,20 @@ func (s *router) postImagesCreate(ctx context.Context, w http.ResponseWriter, r 
 			}
 		}
 	} else { //import
-		var newRef reference.Named
+		var newRef references.BoundNamed
 		if repo != "" {
 			var err error
-			newRef, err = reference.ParseNamed(repo)
+			newRef, err = references.ParseAndBindDefault(repo)
 			if err != nil {
 				return err
 			}
 
-			if _, isCanonical := newRef.(reference.Canonical); isCanonical {
+			if _, isCanonical := newRef.(references.BoundCanonical); isCanonical {
 				return errors.New("cannot import digest reference")
 			}
 
 			if tag != "" {
-				newRef, err = reference.WithTag(newRef, tag)
+				newRef, err = newRef.WithTag(tag)
 				if err != nil {
 					return err
 				}
@@ -209,14 +210,14 @@ func (s *router) postImagesPush(ctx context.Context, w http.ResponseWriter, r *h
 		}
 	}
 
-	ref, err := reference.ParseNamed(vars["name"])
+	ref, err := references.ParseAndBindDefault(vars["name"])
 	if err != nil {
 		return err
 	}
 	tag := r.Form.Get("tag")
 	if tag != "" {
 		// Push by digest is not supported, so only tags are supported.
-		ref, err = reference.WithTag(ref, tag)
+		ref, err = ref.WithTag(tag)
 		if err != nil {
 			return err
 		}
@@ -328,12 +329,15 @@ func (s *router) postImagesTag(ctx context.Context, w http.ResponseWriter, r *ht
 	}
 	repo := r.Form.Get("repo")
 	tag := r.Form.Get("tag")
-	newTag, err := reference.WithName(repo)
+	newTag, err := references.ParseAndBindDefault(repo)
 	if err != nil {
 		return err
 	}
+	if !reference.NamedOnly(newTag) {
+		return errors.New("repo must be a name only")
+	}
 	if tag != "" {
-		if newTag, err = reference.WithTag(newTag, tag); err != nil {
+		if newTag, err = newTag.WithTag(tag); err != nil {
 			return err
 		}
 	}

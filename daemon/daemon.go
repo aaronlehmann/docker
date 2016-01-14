@@ -60,7 +60,7 @@ import (
 	"github.com/docker/docker/pkg/sysinfo"
 	"github.com/docker/docker/pkg/system"
 	"github.com/docker/docker/pkg/truncindex"
-	"github.com/docker/docker/reference"
+	"github.com/docker/docker/references"
 	"github.com/docker/docker/registry"
 	"github.com/docker/docker/runconfig"
 	"github.com/docker/docker/utils"
@@ -141,7 +141,7 @@ type Daemon struct {
 	repository                string
 	containers                *contStore
 	execCommands              *exec.Store
-	referenceStore            reference.Store
+	referenceStore            references.Store
 	downloadManager           *xfer.LayerDownloadManager
 	uploadManager             *xfer.LayerUploadManager
 	distributionMetadataStore dmetadata.Store
@@ -755,7 +755,7 @@ func NewDaemon(config *Config, registryService *registry.Service) (daemon *Daemo
 
 	eventsService := events.New()
 
-	referenceStore, err := reference.NewReferenceStore(filepath.Join(imageRoot, "repositories.json"))
+	referenceStore, err := references.NewReferenceStore(filepath.Join(imageRoot, "repositories.json"))
 	if err != nil {
 		return nil, fmt.Errorf("Couldn't create Tag store repositories: %s", err)
 	}
@@ -983,7 +983,7 @@ func (daemon *Daemon) changes(container *container.Container) ([]archive.Change,
 
 // TagImage creates a tag in the repository reponame, pointing to the image named
 // imageName.
-func (daemon *Daemon) TagImage(newTag reference.Named, imageName string) error {
+func (daemon *Daemon) TagImage(newTag references.BoundNamed, imageName string) error {
 	imageID, err := daemon.GetImageID(imageName)
 	if err != nil {
 		return err
@@ -1028,7 +1028,7 @@ func isBrokenPipe(e error) bool {
 
 // PullImage initiates a pull operation. image is the repository name to pull, and
 // tag may be either empty, or indicate a specific tag to pull.
-func (daemon *Daemon) PullImage(ref reference.Named, metaHeaders map[string][]string, authConfig *types.AuthConfig, outStream io.Writer) error {
+func (daemon *Daemon) PullImage(ref references.BoundNamed, metaHeaders map[string][]string, authConfig *types.AuthConfig, outStream io.Writer) error {
 	// Include a buffer so that slow client connections don't affect
 	// transfer performance.
 	progressChan := make(chan progress.Progress, 100)
@@ -1071,7 +1071,7 @@ func (daemon *Daemon) ExportImage(names []string, outStream io.Writer) error {
 }
 
 // PushImage initiates a push operation on the repository named localName.
-func (daemon *Daemon) PushImage(ref reference.Named, metaHeaders map[string][]string, authConfig *types.AuthConfig, outStream io.Writer) error {
+func (daemon *Daemon) PushImage(ref references.BoundNamed, metaHeaders map[string][]string, authConfig *types.AuthConfig, outStream io.Writer) error {
 	// Include a buffer so that slow client connections don't affect
 	// transfer performance.
 	progressChan := make(chan progress.Progress, 100)
@@ -1118,9 +1118,9 @@ func (daemon *Daemon) LookupImage(name string) (*types.ImageInspect, error) {
 	repoDigests := []string{}
 	for _, ref := range refs {
 		switch ref.(type) {
-		case reference.NamedTagged:
+		case references.BoundTagged:
 			repoTags = append(repoTags, ref.String())
-		case reference.Canonical:
+		case references.BoundCanonical:
 			repoDigests = append(repoDigests, ref.String())
 		}
 	}
@@ -1236,7 +1236,7 @@ func (daemon *Daemon) ImageHistory(name string) ([]*types.ImageHistory, error) {
 
 		var tags []string
 		for _, r := range daemon.referenceStore.References(id) {
-			if _, ok := r.(reference.NamedTagged); ok {
+			if _, ok := r.(references.BoundTagged); ok {
 				tags = append(tags, r.String())
 			}
 		}
@@ -1265,11 +1265,11 @@ func (daemon *Daemon) GetImageID(refOrID string) (image.ID, error) {
 	}
 
 	// Treat it as a possible tag or digest reference
-	if ref, err := reference.ParseNamed(refOrID); err == nil {
+	if ref, err := references.ParseAndBindDefault(refOrID); err == nil {
 		if id, err := daemon.referenceStore.Get(ref); err == nil {
 			return id, nil
 		}
-		if tagged, ok := ref.(reference.NamedTagged); ok {
+		if tagged, ok := ref.(references.BoundTagged); ok {
 			if id, err := daemon.imageStore.Search(tagged.Tag()); err == nil {
 				for _, namedRef := range daemon.referenceStore.References(id) {
 					if namedRef.Name() == ref.Name() {

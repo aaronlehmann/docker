@@ -10,7 +10,7 @@ import (
 	"github.com/docker/docker/pkg/jsonmessage"
 	flag "github.com/docker/docker/pkg/mflag"
 	"github.com/docker/docker/pkg/urlutil"
-	"github.com/docker/docker/reference"
+	"github.com/docker/docker/references"
 	"github.com/docker/engine-api/types"
 )
 
@@ -44,7 +44,7 @@ func (cli *DockerCli) CmdImport(args ...string) error {
 
 	if repository != "" {
 		//Check if the given image name can be resolved
-		if _, err := reference.ParseNamed(repository); err != nil {
+		if _, err := references.ParseAndBindDefault(repository); err != nil {
 			return err
 		}
 	}

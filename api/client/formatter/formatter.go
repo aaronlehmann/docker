@@ -8,7 +8,7 @@ import (
 	"text/tabwriter"
 	"text/template"
 
-	"github.com/docker/docker/reference"
+	"github.com/docker/docker/references"
 	"github.com/docker/engine-api/types"
 )
 
@@ -223,16 +223,16 @@ virtual_size: {{.Size}}
 			digest := "<none>"
 
 			if !strings.HasPrefix(repoAndRef, "<none>") {
-				ref, err := reference.ParseNamed(repoAndRef)
+				ref, err := references.ParseAndBindDefault(repoAndRef)
 				if err != nil {
 					continue
 				}
 				repo = ref.Name()
 
 				switch x := ref.(type) {
-				case reference.Canonical:
+				case references.BoundCanonical:
 					digest = x.Digest().String()
-				case reference.NamedTagged:
+				case references.BoundTagged:
 					tag = x.Tag()
 				}
 			}
