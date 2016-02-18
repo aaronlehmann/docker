@@ -207,6 +207,10 @@ func (fms *fileMetadataStore) TarSplitReader(layer ChainID) (io.ReadCloser, erro
 	}), nil
 }
 
+func (fms *fileMetadataStore) replaceTarSplit(layer ChainID, sourcePath string) error {
+	return os.Rename(sourcePath, fms.getLayerFilename(layer, "tar-split.json.gz"))
+}
+
 func (fms *fileMetadataStore) SetMountID(mount string, mountID string) error {
 	if err := os.MkdirAll(fms.getMountDirectory(mount), 0755); err != nil {
 		return err

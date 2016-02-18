@@ -1,6 +1,13 @@
 package layer
 
-import "io"
+import (
+	"io"
+	"io/ioutil"
+	"os"
+	"path/filepath"
+
+	"github.com/Sirupsen/logrus"
+)
 
 type roLayer struct {
 	chainID    ChainID
@@ -24,12 +31,65 @@ func (rl *roLayer) TarStream() (io.ReadCloser, error) {
 	go func() {
 		err := rl.layerStore.assembleTarTo(rl.cacheID, r, nil, pw)
 		if err != nil {
+			if err == io.ErrUnexpectedEOF {
+				// The tarsplit file was corrupted, probably
+				// because of a missing call to Close on the
+				// gzip.Writer during migration in 1.10 -
+				// 1.10.1. Try to repair this file by
+				// recreating it. The hash isn't guaranteed to
+				// match, but there's a good chance it will.
+				// If it does match, we can replace the
+				// tarsplit file with the new contents, and the
+				// next attempt to read the layer as a tar will
+				// succeed.
+				rl.attemptTarSplitReconstruction()
+			}
+
 			pw.CloseWithError(err)
 		} else {
 			pw.Close()
 		}
 	}()
 	return pr, nil
+}
+
+// attemptTarSplitReconstruction tries to fix a possibly corrupt tarsplit
+// file by regenerating it. This is not guaranteed to work, because the
+// hash form the new diff could end up being different than the existing DiffID.
+func (rl *roLayer) attemptTarSplitReconstruction() {
+	// Can only do this recovery with file-based
+	// stores.
+	if fileStore, ok := rl.layerStore.store.(*fileMetadataStore); ok {
+		logrus.Errorf("encountered unexpected EOF error in TarStream. attempting tarsplit reconstruction.")
+		parentCacheID := ""
+		if rl.parent != nil {
+			parentCacheID = rl.parent.cacheID
+		}
+
+		dirName, err := ioutil.TempDir(fileStore.root, "tarsplit-tmp-")
+		if err != nil {
+			logrus.Errorf("could not create temporary directory for tarsplit reconstruction: %v", err)
+			return
+		}
+		defer os.RemoveAll(dirName)
+
+		newTarSplitPath := filepath.Join(dirName, "tar-split.json.gz")
+		resultDiffID, _, err := rl.layerStore.checksumForGraphIDNoTarsplit(rl.cacheID, parentCacheID, newTarSplitPath)
+		if err != nil {
+			logrus.Errorf("tarsplit reconstruction failed: %v", err)
+			return
+		}
+
+		if resultDiffID != rl.diffID {
+			logrus.Errorf("tarsplit reconstruction failed: %s != %s", resultDiffID, rl.diffID)
+			return
+		}
+
+		if err = fileStore.replaceTarSplit(rl.chainID, newTarSplitPath); err != nil {
+			logrus.Errorf("failed to replace tarsplit file: %v", err)
+			return
+		}
+	}
 }
 
 func (rl *roLayer) ChainID() ChainID {
