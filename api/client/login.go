@@ -15,7 +15,7 @@ import (
 	"github.com/docker/engine-api/types"
 )
 
-// CmdLogin logs in or registers a user to a Docker registry service.
+// CmdLogin logs in a user to a Docker registry service.
 //
 // If no server is specified, the user will be logged into or registered to the registry's index server.
 //
@@ -26,7 +26,6 @@ func (cli *DockerCli) CmdLogin(args ...string) error {
 
 	flUser := cmd.String([]string{"u", "-username"}, "", "Username")
 	flPassword := cmd.String([]string{"p", "-password"}, "", "Password")
-	flEmail := cmd.String([]string{"e", "-email"}, "", "Email")
 
 	cmd.ParseFlags(args, true)
 
@@ -42,7 +41,7 @@ func (cli *DockerCli) CmdLogin(args ...string) error {
 		serverAddress = cli.electAuthServer()
 	}
 
-	authConfig, err := cli.configureAuth(*flUser, *flPassword, *flEmail, serverAddress)
+	authConfig, err := cli.configureAuth(*flUser, *flPassword, serverAddress)
 	if err != nil {
 		return err
 	}
@@ -77,7 +76,7 @@ func (cli *DockerCli) promptWithDefault(prompt string, configDefault string) {
 	}
 }
 
-func (cli *DockerCli) configureAuth(flUser, flPassword, flEmail, serverAddress string) (types.AuthConfig, error) {
+func (cli *DockerCli) configureAuth(flUser, flPassword, serverAddress string) (types.AuthConfig, error) {
 	authconfig, ok := cli.configFile.AuthConfigs[serverAddress]
 	if !ok {
 		authconfig = types.AuthConfig{}
@@ -114,28 +113,8 @@ func (cli *DockerCli) configureAuth(flUser, flPassword, flEmail, serverAddress s
 		}
 	}
 
-	// Assume that a different username means they may not want to use
-	// the email from the config file, so prompt it
-	if flUser != authconfig.Username {
-		if flEmail == "" {
-			cli.promptWithDefault("Email", authconfig.Email)
-			flEmail = readInput(cli.in, cli.out)
-			if flEmail == "" {
-				flEmail = authconfig.Email
-			}
-		}
-	} else {
-		// However, if they don't override the username use the
-		// email from the cmd line if specified. IOW, allow
-		// then to change/override them.  And if not specified, just
-		// use what's in the config file
-		if flEmail == "" {
-			flEmail = authconfig.Email
-		}
-	}
 	authconfig.Username = flUser
 	authconfig.Password = flPassword
-	authconfig.Email = flEmail
 	authconfig.ServerAddress = serverAddress
 	cli.configFile.AuthConfigs[serverAddress] = authconfig
 	return authconfig, nil
