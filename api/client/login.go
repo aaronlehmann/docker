@@ -57,13 +57,23 @@ func (cli *DockerCli) CmdLogin(args ...string) error {
 		return err
 	}
 
+	if response.IdentityToken != "" {
+		authConfig.Password = ""
+		authConfig.IdentityToken = response.IdentityToken
+	}
+	cli.configFile.AuthConfigs[serverAddress] = authConfig
+
 	if err := cli.configFile.Save(); err != nil {
 		return fmt.Errorf("Error saving config file: %v", err)
 	}
-	fmt.Fprintf(cli.out, "WARNING: login credentials saved in %s\n", cli.configFile.Filename())
+	if authConfig.IdentityToken != "" {
+		fmt.Fprintf(cli.out, "Identity token saved in %s\n", cli.configFile.Filename())
+	} else {
+		fmt.Fprintf(cli.out, "WARNING: login credentials saved in %s\n", cli.configFile.Filename())
+	}
 
 	if response.Status != "" {
-		fmt.Fprintf(cli.out, "%s\n", response.Status)
+		fmt.Fprintln(cli.out, response.Status)
 	}
 	return nil
 }
@@ -116,7 +126,7 @@ func (cli *DockerCli) configureAuth(flUser, flPassword, serverAddress string) (t
 	authconfig.Username = flUser
 	authconfig.Password = flPassword
 	authconfig.ServerAddress = serverAddress
-	cli.configFile.AuthConfigs[serverAddress] = authconfig
+	authconfig.IdentityToken = ""
 	return authconfig, nil
 }
 
