@@ -77,8 +77,9 @@ The helpers always use the first argument in the command to identify the action.
 There are only three possible values for that argument: `store`, `get`, and `erase`.
 
 The `store` command takes a JSON payload from the standard input. That payload carries
-the server address, to identify the credential, the user name and the password.
-This is an example of that payload:
+the server address, to identify the credential, the user name, and either a password
+or an identity token. This is an example of that payload in the case where a password
+is used:
 
 ```json
 {
@@ -87,6 +88,17 @@ This is an example of that payload:
 	"Password": "passw0rd1"
 }
 ```
+
+This is an example of the payload using an identity token:
+
+```json
+{
+	"ServerURL": "https://index.docker.io/v1",
+	"Username": "david",
+	"IdentityToken": "abcdefg1234567"
+}
+```
+
 
 The `store` command can write error messages to `STDOUT` that the docker engine
 will show if there was an issue.
@@ -104,6 +116,9 @@ and password from this payload:
 	"Password": "passw0rd1"
 }
 ```
+
+The payload can contain either "Password" field or an "IdentityToken" field, similar
+to the `store` payload described above.
 
 The `erase` command takes a string payload from `STDIN`. That payload carries
 the server address that the docker engine wants to remove credentials for. This is
