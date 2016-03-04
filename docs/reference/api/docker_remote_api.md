@@ -123,6 +123,7 @@ This section lists each version from latest to oldest.  Each listing includes a 
 * `POST /networks/create` now supports enabling ipv6 on the network by setting the `EnableIPv6` field (doing this with a label will no longer work).
 * `GET /info` now returns `CgroupDriver` field showing what cgroup driver the daemon is using; `cgroupfs` or `systemd`.
 * `GET /info` now returns `KernelMemory` field, showing if "kernel memory limit" is supported.
+* `POST /auth` now returns an `IdentityToken` when supported by a registry.
 
 ### v1.22 API changes
 
