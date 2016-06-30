@@ -39,7 +39,7 @@ func runCreate(dockerCli *client.DockerCli, opts *serviceOptions) error {
 		return err
 	}
 
-	response, err := client.ServiceCreate(context.Background(), service)
+	response, err := client.ServiceCreate(context.Background(), service, nil)
 	if err != nil {
 		return err
 	}

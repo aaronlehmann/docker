@@ -49,7 +49,7 @@ func runUpdate(dockerCli *client.DockerCli, flags *pflag.FlagSet, serviceID stri
 	if err != nil {
 		return err
 	}
-	err = client.ServiceUpdate(ctx, service.ID, service.Version, service.Spec)
+	err = client.ServiceUpdate(ctx, service.ID, service.Version, service.Spec, nil)
 	if err != nil {
 		return err
 	}
