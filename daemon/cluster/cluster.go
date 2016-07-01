@@ -303,8 +303,14 @@ func (c *Cluster) Init(req types.InitRequest) (string, error) {
 		return "", err
 	}
 
+	listenAddr, err := resolveListenAddr(req.ListenAddr)
+	if err != nil {
+		c.Unlock()
+		return "", err
+	}
+
 	// todo: check current state existing
-	n, err := c.startNewNode(req.ForceNewCluster, req.ListenAddr, "", "", "", false)
+	n, err := c.startNewNode(req.ForceNewCluster, listenAddr, "", "", "", false)
 	if err != nil {
 		c.Unlock()
 		return "", err
@@ -341,6 +347,7 @@ func (c *Cluster) Join(req types.JoinRequest) error {
 		c.Unlock()
 		return err
 	}
+
 	// todo: check current state existing
 	n, err := c.startNewNode(false, req.ListenAddr, req.RemoteAddrs[0], req.Secret, req.CACertHash, req.Manager)
 	if err != nil {
