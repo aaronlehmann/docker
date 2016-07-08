@@ -23,13 +23,13 @@ node. For example, the tutorial uses a machine named `manager1`.
 2. Run the following command to create a new swarm:
 
     ```
-    docker swarm init --listen-addr <MANAGER-IP>:<PORT>
+    docker swarm init --advertise-addr <MANAGER-IP>
     ```
 
     In the tutorial, the following command creates a swarm on the `manager1` machine:
 
     ```
-    $ docker swarm init --listen-addr 192.168.99.100:2377
+    $ docker swarm init --advertise-addr 192.168.99.100
     No --secret provided. Generated random secret:
 	4ao565v9jsuogtq5t8s379ulb
 
@@ -41,9 +41,9 @@ node. For example, the tutorial uses a machine named `manager1`.
 	192.168.99.100:2377
     ```
 
-    The `--listen-addr` flag configures the manager node to listen on port
-    `2377`. The other nodes in the swarm must be able to access the manager at
-    the IP address.
+    The `--advertise-addr` flag configures the manager node to publish its
+    address as `192.168.99.100`. The other nodes in the swarm must be able
+    to access the manager at the IP address.
 
 3. Run `docker info` to view the current state of the swarm:
 

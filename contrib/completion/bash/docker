@@ -1750,14 +1750,14 @@ _docker_swarm_init() {
 			COMPREPLY=( $( compgen -W "manager none worker" -- "$cur" ) )
 			return
 			;;
-		--listen-addr|--secret)
+		--advertise-addr|--listen-addr|--secret)
 			return
 			;;
 	esac
 
 	case "$cur" in
 		-*)
-			COMPREPLY=( $( compgen -W "--auto-accept --force-new-cluster --help --listen-addr --secret" -- "$cur" ) )
+			COMPREPLY=( $( compgen -W "--advertise-addr --auto-accept --force-new-cluster --help --listen-addr --secret" -- "$cur" ) )
 			;;
 	esac
 }
@@ -1778,14 +1778,14 @@ _docker_swarm_inspect() {
 
 _docker_swarm_join() {
 	case "$prev" in
-		--ca-hash|--listen-addr|--secret)
+		--advertise-addr|--ca-hash|--listen-addr|--secret)
 			return
 			;;
 	esac
 
 	case "$cur" in
 		-*)
-			COMPREPLY=( $( compgen -W "--ca-hash --help --listen-addr --manager --secret" -- "$cur" ) )
+			COMPREPLY=( $( compgen -W "--advertise-addr --ca-hash --help --listen-addr --manager --secret" -- "$cur" ) )
 			;;
 	esac
 }
