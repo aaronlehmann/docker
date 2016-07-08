@@ -65,7 +65,7 @@ weight = -1
       -s, --storage-driver=""                Storage driver to use
       --selinux-enabled                      Enable selinux support
       --storage-opt=[]                       Set storage driver options
-      --swarm-default-listen-addr            Set default address or interface for swarm listening address
+      --swarm-default-advertise-addr         Set default address or interface for swarm advertised address
       --tls                                  Use TLS; implied by --tlsverify
       --tlscacert="~/.docker/ca.pem"         Trust certs signed only by this CA
       --tlscert="~/.docker/cert.pem"         Path to TLS certificate file
@@ -1037,7 +1037,7 @@ This is a full example of the allowed configuration options on Linux:
 	"tlscacert": "",
 	"tlscert": "",
 	"tlskey": "",
-	"swarm-default-listen-addr": "",
+	"swarm-default-advertise-addr": "",
 	"api-cors-header": "",
 	"selinux-enabled": false,
 	"userns-remap": "",
@@ -1108,7 +1108,7 @@ This is a full example of the allowed configuration options on Windows:
     "tlscacert": "",
     "tlscert": "",
     "tlskey": "",
-    "swarm-default-listen-addr": "",
+    "swarm-default-advertise-addr": "",
     "group": "",
     "default-ulimits": {},
     "bridge": "",
