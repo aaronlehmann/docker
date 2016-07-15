@@ -11,6 +11,13 @@ var ignoredInterfacePrefixes = []string{
 	"docker",
 }
 
+var (
+	errNoSuchInterface       = errors.New("no such interface")
+	errMultipleIPs           = errors.New("could not choose an IP address to advertise since this system has multiple addresses")
+	errNoIP                  = errors.New("could not find the system's IP address")
+	errMustSpecifyListenAddr = errors.New("must specify a listening address because the address to advertise is not recognized as a sytem address")
+)
+
 func resolveListenAddr(specifiedAddr string) (string, string, error) {
 	specifiedHost, specifiedPort, err := net.SplitHostPort(specifiedAddr)
 	if err != nil {
@@ -30,7 +37,7 @@ func resolveListenAddr(specifiedAddr string) (string, string, error) {
 	return specifiedHost, specifiedPort, nil
 }
 
-func resolveAdvertiseAddr(advertiseAddr string, defaultAdvertiseAddr string, listenAddrPort string) (string, error) {
+func resolveAdvertiseAddr(advertiseAddr, defaultAdvertiseAddr, listenAddrHost, listenAddrPort string) (string, error) {
 	// Approach:
 	// - If an advertise address is specified, use that. Resolve the
 	//   interface's address if an interface was specified in
@@ -40,6 +47,8 @@ func resolveAdvertiseAddr(advertiseAddr string, defaultAdvertiseAddr string, lis
 	//   if an interface name was specified in defaultAdvertiseAddr.
 	// - Otherwise, try to autodetect the system's address. Use the port in
 	//   listenAddrPort with this address if autodetection succeeds.
+
+	systemIPs := listSystemIPs()
 
 	if advertiseAddr != "" {
 		advertiseHost, advertisePort, err := net.SplitHostPort(advertiseAddr)
@@ -59,6 +68,23 @@ func resolveAdvertiseAddr(advertiseAddr string, defaultAdvertiseAddr string, lis
 			return "", err
 		}
 
+		// If the advertise address is not one of the system's
+		// addresses, we also require a listen address.
+		listenAddrIP := net.ParseIP(listenAddrHost)
+		if listenAddrIP != nil && listenAddrIP.IsUnspecified() {
+			advertiseIP := net.ParseIP(advertiseHost)
+			if advertiseIP == nil {
+				// not an IP
+				return "", errMustSpecifyListenAddr
+			}
+			for _, systemIP := range systemIPs {
+				if systemIP.Equal(advertiseIP) {
+					return net.JoinHostPort(advertiseHost, advertisePort), nil
+				}
+			}
+			return "", errMustSpecifyListenAddr
+		}
+
 		return net.JoinHostPort(advertiseHost, advertisePort), nil
 	}
 
@@ -72,6 +98,23 @@ func resolveAdvertiseAddr(advertiseAddr string, defaultAdvertiseAddr string, lis
 		}
 		if err != errNoSuchInterface {
 			return "", err
+		}
+
+		// If the advertise address is not one of the system's
+		// addresses, we also require a listen address.
+		listenAddrIP := net.ParseIP(listenAddrHost)
+		if listenAddrIP != nil && listenAddrIP.IsUnspecified() {
+			advertiseIP := net.ParseIP(defaultAdvertiseAddr)
+			if advertiseIP == nil {
+				// not an IP
+				return "", errMustSpecifyListenAddr
+			}
+			for _, systemIP := range systemIPs {
+				if systemIP.Equal(advertiseIP) {
+					return net.JoinHostPort(defaultAdvertiseAddr, listenAddrPort), nil
+				}
+			}
+			return "", errMustSpecifyListenAddr
 		}
 
 		return net.JoinHostPort(defaultAdvertiseAddr, listenAddrPort), nil
@@ -129,10 +172,6 @@ func resolveInterfaceAddr(specifiedInterface string) (net.IP, error) {
 	}
 	return interfaceAddr6, nil
 }
-
-var errNoSuchInterface = errors.New("no such interface")
-var errMultipleIPs = errors.New("could not choose an IP address to advertise since this system has multiple addresses")
-var errNoIP = errors.New("could not find the system's IP address")
 
 func resolveSystemAddr() (net.IP, error) {
 	// Use the system's only IP address, or fail if there are
@@ -206,4 +245,30 @@ ifaceLoop:
 	}
 
 	return systemAddr, nil
+}
+
+func listSystemIPs() []net.IP {
+	interfaces, err := net.Interfaces()
+	if err != nil {
+		return nil
+	}
+
+	var systemAddrs []net.IP
+
+	for _, intf := range interfaces {
+		addrs, err := intf.Addrs()
+		if err != nil {
+			continue
+		}
+
+		for _, addr := range addrs {
+			ipAddr, ok := addr.(*net.IPNet)
+
+			if ok && ipAddr.IP.IsGlobalUnicast() {
+				systemAddrs = append(systemAddrs, ipAddr.IP)
+			}
+		}
+	}
+
+	return systemAddrs
 }

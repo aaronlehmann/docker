@@ -319,7 +319,7 @@ func (c *Cluster) Init(req types.InitRequest) (string, error) {
 		return "", err
 	}
 
-	advertiseAddr, err := resolveAdvertiseAddr(req.AdvertiseAddr, c.config.DefaultAdvertiseAddr, listenPort)
+	advertiseAddr, err := resolveAdvertiseAddr(req.AdvertiseAddr, c.config.DefaultAdvertiseAddr, listenHost, listenPort)
 	if err != nil {
 		c.Unlock()
 		return "", err
@@ -370,7 +370,7 @@ func (c *Cluster) Join(req types.JoinRequest) error {
 		return err
 	}
 
-	advertiseAddr, err := resolveAdvertiseAddr(req.AdvertiseAddr, c.config.DefaultAdvertiseAddr, listenPort)
+	advertiseAddr, err := resolveAdvertiseAddr(req.AdvertiseAddr, c.config.DefaultAdvertiseAddr, listenHost, listenPort)
 	if err != nil {
 		// For joining, we don't need to provide an advertise address,
 		// since the remote side can detect it.
