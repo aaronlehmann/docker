@@ -266,6 +266,111 @@ func (s *DockerSwarmSuite) TestApiSwarmServicesCreateGlobal(c *check.C) {
 	waitAndAssert(c, defaultReconciliationTimeout, d5.checkActiveContainerCount, checker.Equals, 1)
 }
 
+func (s *DockerSwarmSuite) TestApiSwarmServicesGlobalConstraints(c *check.C) {
+	d1 := s.AddDaemon(c, true, true)
+	d2 := s.AddDaemon(c, true, false)
+	d3 := s.AddDaemon(c, true, false)
+
+	sID := d1.createService(c, simpleTestService, setGlobalMode)
+
+	waitAndAssert(c, defaultReconciliationTimeout, d1.checkActiveContainerCount, checker.Equals, 1)
+	waitAndAssert(c, defaultReconciliationTimeout, d2.checkActiveContainerCount, checker.Equals, 1)
+	waitAndAssert(c, defaultReconciliationTimeout, d3.checkActiveContainerCount, checker.Equals, 1)
+	waitAndAssert(c, defaultReconciliationTimeout, d1.checkServiceDesiredStateRunningTasks(sID, d1.NodeID), checker.Equals, 1)
+	waitAndAssert(c, defaultReconciliationTimeout, d1.checkServiceDesiredStateRunningTasks(sID, d2.NodeID), checker.Equals, 1)
+	waitAndAssert(c, defaultReconciliationTimeout, d1.checkServiceDesiredStateRunningTasks(sID, d3.NodeID), checker.Equals, 1)
+
+	// Add a constraint to the service. The tasks should be shut down and
+	// not replaced.
+	service := d1.getService(c, sID)
+	d1.updateService(c, service, setConstraints([]string{"node.labels.a==1"}))
+
+	waitAndAssert(c, defaultReconciliationTimeout, d1.checkActiveContainerCount, checker.Equals, 0)
+	waitAndAssert(c, defaultReconciliationTimeout, d2.checkActiveContainerCount, checker.Equals, 0)
+	waitAndAssert(c, defaultReconciliationTimeout, d3.checkActiveContainerCount, checker.Equals, 0)
+	waitAndAssert(c, defaultReconciliationTimeout, d1.checkServiceDesiredStateRunningTasks(sID, d1.NodeID), checker.Equals, 0)
+	waitAndAssert(c, defaultReconciliationTimeout, d1.checkServiceDesiredStateRunningTasks(sID, d2.NodeID), checker.Equals, 0)
+	waitAndAssert(c, defaultReconciliationTimeout, d1.checkServiceDesiredStateRunningTasks(sID, d3.NodeID), checker.Equals, 0)
+
+	setNodeLabelA := func(n *swarm.Node) {
+		n.Spec.Annotations.Labels = map[string]string{
+			"a": "1",
+		}
+	}
+	setBothNodeLabels := func(n *swarm.Node) {
+		n.Spec.Annotations.Labels = map[string]string{
+			"a": "1",
+			"b": "1",
+		}
+	}
+	removeNodeLabels := func(n *swarm.Node) {
+		n.Spec.Annotations.Labels = map[string]string{}
+	}
+
+	// Add a new node that meets the constraint.
+	d4 := s.AddDaemon(c, true, false)
+	d1.updateNode(c, d4.NodeID, setNodeLabelA)
+
+	waitAndAssert(c, defaultReconciliationTimeout, d1.checkActiveContainerCount, checker.Equals, 0)
+	waitAndAssert(c, defaultReconciliationTimeout, d2.checkActiveContainerCount, checker.Equals, 0)
+	waitAndAssert(c, defaultReconciliationTimeout, d3.checkActiveContainerCount, checker.Equals, 0)
+	waitAndAssert(c, defaultReconciliationTimeout, d4.checkActiveContainerCount, checker.Equals, 1)
+	waitAndAssert(c, defaultReconciliationTimeout, d1.checkServiceDesiredStateRunningTasks(sID, d1.NodeID), checker.Equals, 0)
+	waitAndAssert(c, defaultReconciliationTimeout, d1.checkServiceDesiredStateRunningTasks(sID, d2.NodeID), checker.Equals, 0)
+	waitAndAssert(c, defaultReconciliationTimeout, d1.checkServiceDesiredStateRunningTasks(sID, d3.NodeID), checker.Equals, 0)
+	waitAndAssert(c, defaultReconciliationTimeout, d1.checkServiceDesiredStateRunningTasks(sID, d4.NodeID), checker.Equals, 1)
+
+	// Make node 2 meet the constraints
+	d1.updateNode(c, d2.NodeID, setBothNodeLabels)
+
+	waitAndAssert(c, defaultReconciliationTimeout, d1.checkActiveContainerCount, checker.Equals, 0)
+	waitAndAssert(c, defaultReconciliationTimeout, d2.checkActiveContainerCount, checker.Equals, 1)
+	waitAndAssert(c, defaultReconciliationTimeout, d3.checkActiveContainerCount, checker.Equals, 0)
+	waitAndAssert(c, defaultReconciliationTimeout, d4.checkActiveContainerCount, checker.Equals, 1)
+	waitAndAssert(c, defaultReconciliationTimeout, d1.checkServiceDesiredStateRunningTasks(sID, d1.NodeID), checker.Equals, 0)
+	waitAndAssert(c, defaultReconciliationTimeout, d1.checkServiceDesiredStateRunningTasks(sID, d2.NodeID), checker.Equals, 1)
+	waitAndAssert(c, defaultReconciliationTimeout, d1.checkServiceDesiredStateRunningTasks(sID, d3.NodeID), checker.Equals, 0)
+	waitAndAssert(c, defaultReconciliationTimeout, d1.checkServiceDesiredStateRunningTasks(sID, d4.NodeID), checker.Equals, 1)
+
+	// Add a second constraint to the service
+	service = d1.getService(c, sID)
+	d1.updateService(c, service, setConstraints([]string{"node.labels.a==1", "node.labels.b==1"}))
+
+	waitAndAssert(c, defaultReconciliationTimeout, d1.checkActiveContainerCount, checker.Equals, 0)
+	waitAndAssert(c, defaultReconciliationTimeout, d2.checkActiveContainerCount, checker.Equals, 1)
+	waitAndAssert(c, defaultReconciliationTimeout, d3.checkActiveContainerCount, checker.Equals, 0)
+	waitAndAssert(c, defaultReconciliationTimeout, d4.checkActiveContainerCount, checker.Equals, 0)
+	waitAndAssert(c, defaultReconciliationTimeout, d1.checkServiceDesiredStateRunningTasks(sID, d1.NodeID), checker.Equals, 0)
+	waitAndAssert(c, defaultReconciliationTimeout, d1.checkServiceDesiredStateRunningTasks(sID, d2.NodeID), checker.Equals, 1)
+	waitAndAssert(c, defaultReconciliationTimeout, d1.checkServiceDesiredStateRunningTasks(sID, d3.NodeID), checker.Equals, 0)
+	waitAndAssert(c, defaultReconciliationTimeout, d1.checkServiceDesiredStateRunningTasks(sID, d4.NodeID), checker.Equals, 0)
+
+	// Remove label from node 4
+	d1.updateNode(c, d4.NodeID, removeNodeLabels)
+
+	waitAndAssert(c, defaultReconciliationTimeout, d1.checkActiveContainerCount, checker.Equals, 0)
+	waitAndAssert(c, defaultReconciliationTimeout, d2.checkActiveContainerCount, checker.Equals, 1)
+	waitAndAssert(c, defaultReconciliationTimeout, d3.checkActiveContainerCount, checker.Equals, 0)
+	waitAndAssert(c, defaultReconciliationTimeout, d4.checkActiveContainerCount, checker.Equals, 0)
+	waitAndAssert(c, defaultReconciliationTimeout, d1.checkServiceDesiredStateRunningTasks(sID, d1.NodeID), checker.Equals, 0)
+	waitAndAssert(c, defaultReconciliationTimeout, d1.checkServiceDesiredStateRunningTasks(sID, d2.NodeID), checker.Equals, 1)
+	waitAndAssert(c, defaultReconciliationTimeout, d1.checkServiceDesiredStateRunningTasks(sID, d3.NodeID), checker.Equals, 0)
+	waitAndAssert(c, defaultReconciliationTimeout, d1.checkServiceDesiredStateRunningTasks(sID, d4.NodeID), checker.Equals, 0)
+
+	// Remove the second constraint
+	service = d1.getService(c, sID)
+	d1.updateService(c, service, setConstraints([]string{"node.labels.a==1"}))
+
+	waitAndAssert(c, defaultReconciliationTimeout, d1.checkActiveContainerCount, checker.Equals, 0)
+	waitAndAssert(c, defaultReconciliationTimeout, d2.checkActiveContainerCount, checker.Equals, 1)
+	waitAndAssert(c, defaultReconciliationTimeout, d3.checkActiveContainerCount, checker.Equals, 0)
+	waitAndAssert(c, defaultReconciliationTimeout, d4.checkActiveContainerCount, checker.Equals, 0)
+	waitAndAssert(c, defaultReconciliationTimeout, d1.checkServiceDesiredStateRunningTasks(sID, d1.NodeID), checker.Equals, 0)
+	waitAndAssert(c, defaultReconciliationTimeout, d1.checkServiceDesiredStateRunningTasks(sID, d2.NodeID), checker.Equals, 1)
+	waitAndAssert(c, defaultReconciliationTimeout, d1.checkServiceDesiredStateRunningTasks(sID, d3.NodeID), checker.Equals, 0)
+	waitAndAssert(c, defaultReconciliationTimeout, d1.checkServiceDesiredStateRunningTasks(sID, d4.NodeID), checker.Equals, 0)
+}
+
 func (s *DockerSwarmSuite) TestApiSwarmServicesUpdate(c *check.C) {
 	const nodeCount = 3
 	var daemons [nodeCount]*SwarmDaemon

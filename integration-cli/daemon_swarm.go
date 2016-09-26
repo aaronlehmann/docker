@@ -152,6 +152,19 @@ func (d *SwarmDaemon) checkServiceRunningTasks(c *check.C, service string) func(
 	}
 }
 
+func (d *SwarmDaemon) checkServiceDesiredStateRunningTasks(serviceID, nodeID string) func(*check.C) (interface{}, check.CommentInterface) {
+	return func(c *check.C) (interface{}, check.CommentInterface) {
+		tasks := d.getServiceTasks(c, serviceID)
+		var runningCount int
+		for _, task := range tasks {
+			if task.NodeID == nodeID && task.DesiredState == swarm.TaskStateRunning {
+				runningCount++
+			}
+		}
+		return runningCount, nil
+	}
+}
+
 func (d *SwarmDaemon) checkServiceTasks(c *check.C, service string) func(*check.C) (interface{}, check.CommentInterface) {
 	return func(*check.C) (interface{}, check.CommentInterface) {
 		tasks := d.getServiceTasks(c, service)
