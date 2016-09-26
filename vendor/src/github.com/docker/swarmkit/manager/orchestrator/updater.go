@@ -180,7 +180,7 @@ func (u *Updater) Run(ctx context.Context, slots []slot) {
 
 	if service.Spec.Update != nil {
 		failureAction = service.Spec.Update.FailureAction
-		allowedFailureFraction = service.Spec.Update.AllowedFailureFraction
+		allowedFailureFraction = service.Spec.Update.MaxFailureRatio
 
 		if service.Spec.Update.Monitor != nil {
 			var err error
@@ -489,9 +489,13 @@ func (u *Updater) removeOldTasks(ctx context.Context, batch *store.Batch, remove
 	return removedTask, nil
 }
 
+func isTaskDirty(s *api.Service, t *api.Task) bool {
+	return !reflect.DeepEqual(s.Spec.Task, t.Spec) ||
+		(t.Endpoint != nil && !reflect.DeepEqual(s.Spec.Endpoint, t.Endpoint.Spec))
+}
+
 func (u *Updater) isTaskDirty(t *api.Task) bool {
-	return !reflect.DeepEqual(u.newService.Spec.Task, t.Spec) ||
-		(t.Endpoint != nil && !reflect.DeepEqual(u.newService.Spec.Endpoint, t.Endpoint.Spec))
+	return isTaskDirty(u.newService, t)
 }
 
 func (u *Updater) isSlotDirty(slot slot) bool {
