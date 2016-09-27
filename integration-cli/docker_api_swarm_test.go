@@ -371,6 +371,104 @@ func (s *DockerSwarmSuite) TestApiSwarmServicesGlobalConstraints(c *check.C) {
 	waitAndAssert(c, defaultReconciliationTimeout, d1.checkServiceDesiredStateRunningTasks(sID, d4.NodeID), checker.Equals, 0)
 }
 
+func (s *DockerSwarmSuite) TestApiSwarmServicesGlobalDrainPause(c *check.C) {
+	d1 := s.AddDaemon(c, true, true)
+	d2 := s.AddDaemon(c, true, false)
+	// drain d2
+	d1.updateNode(c, d2.NodeID, func(n *swarm.Node) {
+		n.Spec.Availability = swarm.NodeAvailabilityDrain
+	})
+	d3 := s.AddDaemon(c, true, false)
+	// pause d3
+	d1.updateNode(c, d3.NodeID, func(n *swarm.Node) {
+		n.Spec.Availability = swarm.NodeAvailabilityPause
+	})
+
+	sID := d1.createService(c, simpleTestService, setGlobalMode)
+
+	waitAndAssert(c, defaultReconciliationTimeout, d1.checkActiveContainerCount, checker.Equals, 1)
+	waitAndAssert(c, defaultReconciliationTimeout, d2.checkActiveContainerCount, checker.Equals, 0)
+	waitAndAssert(c, defaultReconciliationTimeout, d3.checkActiveContainerCount, checker.Equals, 0)
+	waitAndAssert(c, defaultReconciliationTimeout, d1.checkServiceDesiredStateRunningTasks(sID, d1.NodeID), checker.Equals, 1)
+	waitAndAssert(c, defaultReconciliationTimeout, d1.checkServiceDesiredStateRunningTasks(sID, d2.NodeID), checker.Equals, 0)
+	waitAndAssert(c, defaultReconciliationTimeout, d1.checkServiceDesiredStateRunningTasks(sID, d3.NodeID), checker.Equals, 0)
+
+	// undrain and unpause
+	d1.updateNode(c, d2.NodeID, func(n *swarm.Node) {
+		n.Spec.Availability = swarm.NodeAvailabilityActive
+	})
+	d1.updateNode(c, d3.NodeID, func(n *swarm.Node) {
+		n.Spec.Availability = swarm.NodeAvailabilityActive
+	})
+
+	waitAndAssert(c, defaultReconciliationTimeout, d1.checkActiveContainerCount, checker.Equals, 1)
+	waitAndAssert(c, defaultReconciliationTimeout, d2.checkActiveContainerCount, checker.Equals, 1)
+	waitAndAssert(c, defaultReconciliationTimeout, d3.checkActiveContainerCount, checker.Equals, 1)
+	waitAndAssert(c, defaultReconciliationTimeout, d1.checkServiceDesiredStateRunningTasks(sID, d1.NodeID), checker.Equals, 1)
+	waitAndAssert(c, defaultReconciliationTimeout, d1.checkServiceDesiredStateRunningTasks(sID, d2.NodeID), checker.Equals, 1)
+	waitAndAssert(c, defaultReconciliationTimeout, d1.checkServiceDesiredStateRunningTasks(sID, d3.NodeID), checker.Equals, 1)
+
+	// drain d1, pause d2
+	d1.updateNode(c, d1.NodeID, func(n *swarm.Node) {
+		n.Spec.Availability = swarm.NodeAvailabilityDrain
+	})
+	d1.updateNode(c, d2.NodeID, func(n *swarm.Node) {
+		n.Spec.Availability = swarm.NodeAvailabilityPause
+	})
+
+	waitAndAssert(c, defaultReconciliationTimeout, d1.checkActiveContainerCount, checker.Equals, 0)
+	waitAndAssert(c, defaultReconciliationTimeout, d2.checkActiveContainerCount, checker.Equals, 1)
+	waitAndAssert(c, defaultReconciliationTimeout, d3.checkActiveContainerCount, checker.Equals, 1)
+	waitAndAssert(c, defaultReconciliationTimeout, d1.checkServiceDesiredStateRunningTasks(sID, d1.NodeID), checker.Equals, 0)
+	waitAndAssert(c, defaultReconciliationTimeout, d1.checkServiceDesiredStateRunningTasks(sID, d2.NodeID), checker.Equals, 1)
+	waitAndAssert(c, defaultReconciliationTimeout, d1.checkServiceDesiredStateRunningTasks(sID, d3.NodeID), checker.Equals, 1)
+
+	// service image at start
+	image1 := "busybox:latest"
+	// target image in update
+	image2 := "busybox:test"
+
+	// create a different tag
+	out, err := d1.Cmd("tag", image1, image2)
+	c.Assert(err, checker.IsNil, check.Commentf(out))
+	out, err = d2.Cmd("tag", image1, image2)
+	c.Assert(err, checker.IsNil, check.Commentf(out))
+	out, err = d3.Cmd("tag", image1, image2)
+	c.Assert(err, checker.IsNil, check.Commentf(out))
+
+	// update the service
+	// only d3 should update
+	service := d1.getService(c, sID)
+	d1.updateService(c, service, setImage(image2))
+
+	waitAndAssert(c, defaultReconciliationTimeout, d1.checkRunningTaskImages, checker.DeepEquals,
+		map[string]int{image1: 1, image2: 1})
+	waitAndAssert(c, defaultReconciliationTimeout, d1.checkServiceDesiredStateRunningTasks(sID, d1.NodeID), checker.Equals, 0)
+	waitAndAssert(c, defaultReconciliationTimeout, d1.checkServiceDesiredStateRunningTasks(sID, d2.NodeID), checker.Equals, 1)
+	waitAndAssert(c, defaultReconciliationTimeout, d1.checkServiceDesiredStateRunningTasks(sID, d3.NodeID), checker.Equals, 1)
+
+	// unpause d2
+	// now it should update
+	d1.updateNode(c, d2.NodeID, func(n *swarm.Node) {
+		n.Spec.Availability = swarm.NodeAvailabilityActive
+	})
+	waitAndAssert(c, defaultReconciliationTimeout, d1.checkRunningTaskImages, checker.DeepEquals,
+		map[string]int{image2: 2})
+	waitAndAssert(c, defaultReconciliationTimeout, d1.checkServiceDesiredStateRunningTasks(sID, d1.NodeID), checker.Equals, 0)
+	waitAndAssert(c, defaultReconciliationTimeout, d1.checkServiceDesiredStateRunningTasks(sID, d2.NodeID), checker.Equals, 1)
+	waitAndAssert(c, defaultReconciliationTimeout, d1.checkServiceDesiredStateRunningTasks(sID, d3.NodeID), checker.Equals, 1)
+
+	// undrain d1
+	d1.updateNode(c, d1.NodeID, func(n *swarm.Node) {
+		n.Spec.Availability = swarm.NodeAvailabilityActive
+	})
+	waitAndAssert(c, defaultReconciliationTimeout, d1.checkRunningTaskImages, checker.DeepEquals,
+		map[string]int{image2: 3})
+	waitAndAssert(c, defaultReconciliationTimeout, d1.checkServiceDesiredStateRunningTasks(sID, d1.NodeID), checker.Equals, 1)
+	waitAndAssert(c, defaultReconciliationTimeout, d1.checkServiceDesiredStateRunningTasks(sID, d2.NodeID), checker.Equals, 1)
+	waitAndAssert(c, defaultReconciliationTimeout, d1.checkServiceDesiredStateRunningTasks(sID, d3.NodeID), checker.Equals, 1)
+}
+
 func (s *DockerSwarmSuite) TestApiSwarmServicesUpdate(c *check.C) {
 	const nodeCount = 3
 	var daemons [nodeCount]*SwarmDaemon
