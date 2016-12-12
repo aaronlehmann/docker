@@ -522,7 +522,8 @@ func (p *v2Puller) pullSchema2(ctx context.Context, ref reference.Named, mfst *s
 	}
 
 	configChan := make(chan []byte, 1)
-	errChan := make(chan error, 1)
+	errChan := make(chan error, 2)
+	downloadsDone := make(chan struct{})
 	var cancel func()
 	ctx, cancel = context.WithCancel(ctx)
 
@@ -568,35 +569,48 @@ func (p *v2Puller) pullSchema2(ctx context.Context, ref reference.Named, mfst *s
 
 	downloadRootFS = *image.NewRootFS()
 
-	rootFS, release, err := p.config.DownloadManager.Download(ctx, downloadRootFS, descriptors, p.config.ProgressOutput)
-	if err != nil {
-		if configJSON != nil {
-			// Already received the config
-			return "", "", err
+	var (
+		rootFS  image.RootFS
+		release func()
+	)
+
+	go func() {
+		var err error
+		rootFS, release, err = p.config.DownloadManager.Download(ctx, downloadRootFS, descriptors, p.config.ProgressOutput)
+		if err != nil {
+			cancel()
+			errChan <- err
+			return
 		}
-		select {
-		case err = <-errChan:
-			return "", "", err
-		default:
+		close(downloadsDone)
+	}()
+	defer release()
+
+	if configJSON == nil {
+		configJSON, unmarshalledConfig, err = receiveConfig(configChan, errChan)
+
+		if err == nil {
+			if unmarshalledConfig.RootFS == nil {
+				err = errRootFSInvalid
+			} else if runtime.GOOS != "windows" && unmarshalledConfig.OS == "windows" {
+				err = fmt.Errorf("image operating system %q cannot be used on this platform", unmarshalledConfig.OS)
+			}
+		}
+
+		if err != nil {
 			cancel()
 			select {
-			case <-configChan:
+			case <-downloadsDone:
 			case <-errChan:
 			}
 			return "", "", err
 		}
 	}
-	defer release()
 
-	if configJSON == nil {
-		configJSON, unmarshalledConfig, err = receiveConfig(configChan, errChan)
-		if err != nil {
-			return "", "", err
-		}
-
-		if unmarshalledConfig.RootFS == nil {
-			return "", "", errRootFSInvalid
-		}
+	select {
+	case <-downloadsDone:
+	case <-errChan:
+		return "", "", err
 	}
 
 	// The DiffIDs returned in rootFS MUST match those in the config.
