@@ -258,6 +258,9 @@ func convertExtraHostsToSwarmHosts(extraHosts []string) []string {
 }
 
 type serviceOptions struct {
+	detach bool
+	quiet  bool
+
 	name            string
 	labels          opts.ListOpts
 	containerLabels opts.ListOpts
@@ -420,6 +423,9 @@ func (opts *serviceOptions) ToService() (swarm.ServiceSpec, error) {
 // Any flags that are not common are added separately in the individual command
 func addServiceFlags(cmd *cobra.Command, opts *serviceOptions) {
 	flags := cmd.Flags()
+
+	flags.BoolVarP(&opts.detach, "detach", "d", false, "Create service in background")
+	flags.BoolVarP(&opts.quiet, "quiet", "q", false, "Suppress progress output")
 
 	flags.StringVarP(&opts.workdir, flagWorkdir, "w", "", "Working directory inside the container")
 	flags.StringVarP(&opts.user, flagUser, "u", "", "Username or UID (format: <name|uid>[:<group|gid>])")

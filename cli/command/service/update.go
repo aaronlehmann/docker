@@ -2,6 +2,7 @@ package service
 
 import (
 	"fmt"
+	"io"
 	"sort"
 	"strings"
 	"time"
@@ -14,6 +15,7 @@ import (
 	"github.com/docker/docker/cli/command"
 	"github.com/docker/docker/client"
 	"github.com/docker/docker/opts"
+	"github.com/docker/docker/pkg/jsonmessage"
 	runconfigopts "github.com/docker/docker/runconfig/opts"
 	"github.com/docker/go-connections/nat"
 	shlex "github.com/flynn-archive/go-shlex"
@@ -30,7 +32,7 @@ func newUpdateCommand(dockerCli *command.DockerCli) *cobra.Command {
 		Short: "Update a service",
 		Args:  cli.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
-			return runUpdate(dockerCli, cmd.Flags(), args[0])
+			return runUpdate(dockerCli, cmd.Flags(), serviceOpts, args[0])
 		},
 	}
 
@@ -88,7 +90,7 @@ func newListOptsVar() *opts.ListOpts {
 	return opts.NewListOptsRef(&[]string{}, nil)
 }
 
-func runUpdate(dockerCli *command.DockerCli, flags *pflag.FlagSet, serviceID string) error {
+func runUpdate(dockerCli *command.DockerCli, flags *pflag.FlagSet, opts *serviceOptions, serviceID string) error {
 	apiClient := dockerCli.Client()
 	ctx := context.Background()
 	updateOpts := types.ServiceUpdateOptions{}
@@ -159,7 +161,35 @@ func runUpdate(dockerCli *command.DockerCli, flags *pflag.FlagSet, serviceID str
 	}
 
 	fmt.Fprintf(dockerCli.Out(), "%s\n", serviceID)
-	return nil
+
+	if opts.detach {
+		return nil
+	}
+
+	errChan := make(chan error, 1)
+	pipeReader, pipeWriter := io.Pipe()
+
+	go func() {
+		errChan <- serviceProgress(ctx, apiClient, serviceID, pipeWriter)
+	}()
+
+	if opts.quiet {
+		go func() {
+			for {
+				var buf [1024]byte
+				if _, err := pipeReader.Read(buf[:]); err != nil {
+					return
+				}
+			}
+		}()
+		return <-errChan
+	}
+
+	err = jsonmessage.DisplayJSONMessagesToStream(pipeReader, dockerCli.Out(), nil)
+	if err == nil {
+		err = <-errChan
+	}
+	return err
 }
 
 func updateService(flags *pflag.FlagSet, spec *swarm.ServiceSpec) error {

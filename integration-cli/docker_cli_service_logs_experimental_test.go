@@ -30,7 +30,7 @@ func (s *DockerSwarmSuite) TestServiceLogs(c *check.C) {
 	}
 
 	for name, message := range services {
-		out, err := d.Cmd("service", "create", "--name", name, "busybox",
+		out, err := d.Cmd("service", "create", "-d", "--name", name, "busybox",
 			"sh", "-c", fmt.Sprintf("echo %s; tail -f /dev/null", message))
 		c.Assert(err, checker.IsNil)
 		c.Assert(strings.TrimSpace(out), checker.Not(checker.Equals), "")
@@ -55,7 +55,7 @@ func (s *DockerSwarmSuite) TestServiceLogsFollow(c *check.C) {
 
 	name := "TestServiceLogsFollow"
 
-	out, err := d.Cmd("service", "create", "--name", name, "busybox", "sh", "-c", "while true; do echo log test; sleep 0.1; done")
+	out, err := d.Cmd("service", "create", "-d", "--name", name, "busybox", "sh", "-c", "while true; do echo log test; sleep 0.1; done")
 	c.Assert(err, checker.IsNil)
 	c.Assert(strings.TrimSpace(out), checker.Not(checker.Equals), "")
 

@@ -124,7 +124,7 @@ func (s *DockerSwarmSuite) TestSwarmIncompatibleDaemon(c *check.C) {
 func (s *DockerSwarmSuite) TestSwarmServiceTemplatingHostname(c *check.C) {
 	d := s.AddDaemon(c, true, true)
 
-	out, err := d.Cmd("service", "create", "--name", "test", "--hostname", "{{.Service.Name}}-{{.Task.Slot}}", "busybox", "top")
+	out, err := d.Cmd("service", "create", "-d", "--name", "test", "--hostname", "{{.Service.Name}}-{{.Task.Slot}}", "busybox", "top")
 	c.Assert(err, checker.IsNil, check.Commentf(out))
 
 	// make sure task has been deployed.
@@ -143,15 +143,15 @@ func (s *DockerSwarmSuite) TestSwarmServiceListFilter(c *check.C) {
 	name1 := "redis-cluster-md5"
 	name2 := "redis-cluster"
 	name3 := "other-cluster"
-	out, err := d.Cmd("service", "create", "--name", name1, "busybox", "top")
+	out, err := d.Cmd("service", "create", "-d", "--name", name1, "busybox", "top")
 	c.Assert(err, checker.IsNil)
 	c.Assert(strings.TrimSpace(out), checker.Not(checker.Equals), "")
 
-	out, err = d.Cmd("service", "create", "--name", name2, "busybox", "top")
+	out, err = d.Cmd("service", "create", "-d", "--name", name2, "busybox", "top")
 	c.Assert(err, checker.IsNil)
 	c.Assert(strings.TrimSpace(out), checker.Not(checker.Equals), "")
 
-	out, err = d.Cmd("service", "create", "--name", name3, "busybox", "top")
+	out, err = d.Cmd("service", "create", "-d", "--name", name3, "busybox", "top")
 	c.Assert(err, checker.IsNil)
 	c.Assert(strings.TrimSpace(out), checker.Not(checker.Equals), "")
 
@@ -201,7 +201,7 @@ func (s *DockerSwarmSuite) TestSwarmNodeTaskListFilter(c *check.C) {
 	d := s.AddDaemon(c, true, true)
 
 	name := "redis-cluster-md5"
-	out, err := d.Cmd("service", "create", "--name", name, "--replicas=3", "busybox", "top")
+	out, err := d.Cmd("service", "create", "-d", "--name", name, "--replicas=3", "busybox", "top")
 	c.Assert(err, checker.IsNil)
 	c.Assert(strings.TrimSpace(out), checker.Not(checker.Equals), "")
 
@@ -228,17 +228,17 @@ func (s *DockerSwarmSuite) TestSwarmPublishAdd(c *check.C) {
 	d := s.AddDaemon(c, true, true)
 
 	name := "top"
-	out, err := d.Cmd("service", "create", "--name", name, "--label", "x=y", "busybox", "top")
+	out, err := d.Cmd("service", "create", "-d", "--name", name, "--label", "x=y", "busybox", "top")
 	c.Assert(err, checker.IsNil)
 	c.Assert(strings.TrimSpace(out), checker.Not(checker.Equals), "")
 
-	out, err = d.Cmd("service", "update", "--publish-add", "80:80", name)
+	out, err = d.Cmd("service", "update", "-d", "--publish-add", "80:80", name)
 	c.Assert(err, checker.IsNil)
 
-	out, err = d.CmdRetryOutOfSequence("service", "update", "--publish-add", "80:80", name)
+	out, err = d.CmdRetryOutOfSequence("service", "update", "-d", "--publish-add", "80:80", name)
 	c.Assert(err, checker.IsNil)
 
-	out, err = d.CmdRetryOutOfSequence("service", "update", "--publish-add", "80:80", "--publish-add", "80:20", name)
+	out, err = d.CmdRetryOutOfSequence("service", "update", "-d", "--publish-add", "80:80", "--publish-add", "80:20", name)
 	c.Assert(err, checker.NotNil)
 
 	out, err = d.Cmd("service", "inspect", "--format", "{{ .Spec.EndpointSpec.Ports }}", name)
@@ -250,7 +250,7 @@ func (s *DockerSwarmSuite) TestSwarmServiceWithGroup(c *check.C) {
 	d := s.AddDaemon(c, true, true)
 
 	name := "top"
-	out, err := d.Cmd("service", "create", "--name", name, "--user", "root:root", "--group", "wheel", "--group", "audio", "--group", "staff", "--group", "777", "busybox", "top")
+	out, err := d.Cmd("service", "create", "-d", "--name", name, "--user", "root:root", "--group", "wheel", "--group", "audio", "--group", "staff", "--group", "777", "busybox", "top")
 	c.Assert(err, checker.IsNil)
 	c.Assert(strings.TrimSpace(out), checker.Not(checker.Equals), "")
 
@@ -427,7 +427,7 @@ func (s *DockerSwarmSuite) TestSwarmTaskListFilter(c *check.C) {
 	d := s.AddDaemon(c, true, true)
 
 	name := "redis-cluster-md5"
-	out, err := d.Cmd("service", "create", "--name", name, "--replicas=3", "busybox", "top")
+	out, err := d.Cmd("service", "create", "-d", "--name", name, "--replicas=3", "busybox", "top")
 	c.Assert(err, checker.IsNil)
 	c.Assert(strings.TrimSpace(out), checker.Not(checker.Equals), "")
 
@@ -461,7 +461,7 @@ func (s *DockerSwarmSuite) TestSwarmTaskListFilter(c *check.C) {
 	c.Assert(out, checker.Not(checker.Contains), name+".3")
 
 	name = "redis-cluster-sha1"
-	out, err = d.Cmd("service", "create", "--name", name, "--mode=global", "busybox", "top")
+	out, err = d.Cmd("service", "create", "-d", "--name", name, "--mode=global", "busybox", "top")
 	c.Assert(err, checker.IsNil)
 	c.Assert(strings.TrimSpace(out), checker.Not(checker.Equals), "")
 
@@ -490,7 +490,7 @@ func (s *DockerSwarmSuite) TestPsListContainersFilterIsTask(c *check.C) {
 	bareID := strings.TrimSpace(out)[:12]
 	// Create a service
 	name := "busybox-top"
-	out, err = d.Cmd("service", "create", "--name", name, "busybox", "top")
+	out, err = d.Cmd("service", "create", "-d", "--name", name, "busybox", "top")
 	c.Assert(err, checker.IsNil)
 	c.Assert(strings.TrimSpace(out), checker.Not(checker.Equals), "")
 
@@ -709,7 +709,7 @@ func (s *DockerSwarmSuite) TestSwarmServiceEnvFile(c *check.C) {
 	c.Assert(err, checker.IsNil)
 
 	name := "worker"
-	out, err := d.Cmd("service", "create", "--env-file", path, "--env", "VAR1=B", "--env", "VAR1=C", "--env", "VAR2=", "--env", "VAR2", "--name", name, "busybox", "top")
+	out, err := d.Cmd("service", "create", "-d", "--env-file", path, "--env", "VAR1=B", "--env", "VAR1=C", "--env", "VAR2=", "--env", "VAR2", "--name", name, "busybox", "top")
 	c.Assert(err, checker.IsNil)
 	c.Assert(strings.TrimSpace(out), checker.Not(checker.Equals), "")
 
@@ -728,7 +728,7 @@ func (s *DockerSwarmSuite) TestSwarmServiceTTY(c *check.C) {
 
 	// Without --tty
 	expectedOutput := "none"
-	out, err := d.Cmd("service", "create", "--name", name, "busybox", "sh", "-c", ttyCheck)
+	out, err := d.Cmd("service", "create", "-d", "--name", name, "busybox", "sh", "-c", ttyCheck)
 	c.Assert(err, checker.IsNil)
 
 	// Make sure task has been deployed.
@@ -751,7 +751,7 @@ func (s *DockerSwarmSuite) TestSwarmServiceTTY(c *check.C) {
 
 	// With --tty
 	expectedOutput = "TTY"
-	out, err = d.Cmd("service", "create", "--name", name, "--tty", "busybox", "sh", "-c", ttyCheck)
+	out, err = d.Cmd("service", "create", "-d", "--name", name, "--tty", "busybox", "sh", "-c", ttyCheck)
 	c.Assert(err, checker.IsNil)
 
 	// Make sure task has been deployed.
@@ -772,7 +772,7 @@ func (s *DockerSwarmSuite) TestSwarmServiceTTYUpdate(c *check.C) {
 
 	// Create a service
 	name := "top"
-	_, err := d.Cmd("service", "create", "--name", name, "busybox", "top")
+	_, err := d.Cmd("service", "create", "-d", "--name", name, "busybox", "top")
 	c.Assert(err, checker.IsNil)
 
 	// Make sure task has been deployed.
@@ -782,7 +782,7 @@ func (s *DockerSwarmSuite) TestSwarmServiceTTYUpdate(c *check.C) {
 	c.Assert(err, checker.IsNil)
 	c.Assert(strings.TrimSpace(out), checker.Equals, "false")
 
-	_, err = d.Cmd("service", "update", "--tty", name)
+	_, err = d.Cmd("service", "update", "-d", "--tty", name)
 	c.Assert(err, checker.IsNil)
 
 	out, err = d.Cmd("service", "inspect", "--format", "{{ .Spec.TaskTemplate.ContainerSpec.TTY }}", name)
@@ -795,7 +795,7 @@ func (s *DockerSwarmSuite) TestDNSConfig(c *check.C) {
 
 	// Create a service
 	name := "top"
-	_, err := d.Cmd("service", "create", "--name", name, "--dns=1.2.3.4", "--dns-search=example.com", "--dns-option=timeout:3", "busybox", "top")
+	_, err := d.Cmd("service", "create", "-d", "--name", name, "--dns=1.2.3.4", "--dns-search=example.com", "--dns-option=timeout:3", "busybox", "top")
 	c.Assert(err, checker.IsNil)
 
 	// Make sure task has been deployed.
@@ -822,13 +822,13 @@ func (s *DockerSwarmSuite) TestDNSConfigUpdate(c *check.C) {
 
 	// Create a service
 	name := "top"
-	_, err := d.Cmd("service", "create", "--name", name, "busybox", "top")
+	_, err := d.Cmd("service", "create", "-d", "--name", name, "busybox", "top")
 	c.Assert(err, checker.IsNil)
 
 	// Make sure task has been deployed.
 	waitAndAssert(c, defaultReconciliationTimeout, d.CheckActiveContainerCount, checker.Equals, 1)
 
-	_, err = d.Cmd("service", "update", "--dns-add=1.2.3.4", "--dns-search-add=example.com", "--dns-option-add=timeout:3", name)
+	_, err = d.Cmd("service", "update", "-d", "--dns-add=1.2.3.4", "--dns-search-add=example.com", "--dns-option-add=timeout:3", name)
 	c.Assert(err, checker.IsNil)
 
 	out, err := d.Cmd("service", "inspect", "--format", "{{ .Spec.TaskTemplate.ContainerSpec.DNSConfig }}", name)
@@ -1341,7 +1341,7 @@ func (s *DockerSwarmSuite) TestExtraHosts(c *check.C) {
 
 	// Create a service
 	name := "top"
-	_, err := d.Cmd("service", "create", "--name", name, "--host=example.com:1.2.3.4", "busybox", "top")
+	_, err := d.Cmd("service", "create", "-d", "--name", name, "--host=example.com:1.2.3.4", "busybox", "top")
 	c.Assert(err, checker.IsNil)
 
 	// Make sure task has been deployed.
@@ -1384,7 +1384,7 @@ func (s *DockerSwarmSuite) TestSwarmServiceInspectPretty(c *check.C) {
 	d := s.AddDaemon(c, true, true)
 
 	name := "top"
-	out, err := d.Cmd("service", "create", "--name", name, "--limit-cpu=0.5", "busybox", "top")
+	out, err := d.Cmd("service", "create", "-d", "--name", name, "--limit-cpu=0.5", "busybox", "top")
 	c.Assert(err, checker.IsNil, check.Commentf(out))
 
 	expectedOutput := `
@@ -1407,7 +1407,7 @@ func (s *DockerSwarmSuite) TestSwarmNetworkIPAMOptions(c *check.C) {
 	c.Assert(err, checker.IsNil, check.Commentf(out))
 	c.Assert(strings.TrimSpace(out), checker.Equals, "map[foo:bar]")
 
-	out, err = d.Cmd("service", "create", "--network=foo", "--name", "top", "busybox", "top")
+	out, err = d.Cmd("service", "create", "-d", "--network=foo", "--name", "top", "busybox", "top")
 	c.Assert(err, checker.IsNil, check.Commentf(out))
 
 	// make sure task has been deployed.
@@ -1425,7 +1425,7 @@ func (s *DockerTrustedSwarmSuite) TestTrustedServiceCreate(c *check.C) {
 	repoName := s.trustSuite.setupTrustedImage(c, "trusted-pull")
 
 	name := "trusted"
-	serviceCmd := d.Command("-D", "service", "create", "--name", name, repoName, "top")
+	serviceCmd := d.Command("-D", "service", "create", "-d", "--name", name, repoName, "top")
 	icmd.RunCmd(serviceCmd, trustedCmd).Assert(c, icmd.Expected{
 		Err: "resolved image tag to",
 	})
@@ -1443,7 +1443,7 @@ func (s *DockerTrustedSwarmSuite) TestTrustedServiceCreate(c *check.C) {
 	dockerCmd(c, "rmi", repoName)
 
 	name = "untrusted"
-	serviceCmd = d.Command("service", "create", "--name", name, repoName, "top")
+	serviceCmd = d.Command("service", "create", "-d", "--name", name, repoName, "top")
 	icmd.RunCmd(serviceCmd, trustedCmd).Assert(c, icmd.Expected{
 		ExitCode: 1,
 		Err:      "Error: remote trust data does not exist",
@@ -1462,7 +1462,7 @@ func (s *DockerTrustedSwarmSuite) TestTrustedServiceUpdate(c *check.C) {
 	name := "myservice"
 
 	// Create a service without content trust
-	_, err := d.Cmd("service", "create", "--name", name, repoName, "top")
+	_, err := d.Cmd("service", "create", "-d", "--name", name, repoName, "top")
 	c.Assert(err, checker.IsNil)
 
 	out, err := d.Cmd("service", "inspect", "--pretty", name)
@@ -1471,7 +1471,7 @@ func (s *DockerTrustedSwarmSuite) TestTrustedServiceUpdate(c *check.C) {
 	// DOCKER_SERVICE_PREFER_OFFLINE_IMAGE.
 	c.Assert(out, check.Not(checker.Contains), repoName+"@", check.Commentf(out))
 
-	serviceCmd := d.Command("-D", "service", "update", "--image", repoName, name)
+	serviceCmd := d.Command("-D", "service", "update", "-d", "--image", repoName, name)
 	icmd.RunCmd(serviceCmd, trustedCmd).Assert(c, icmd.Expected{
 		Err: "resolved image tag to",
 	})
@@ -1488,7 +1488,7 @@ func (s *DockerTrustedSwarmSuite) TestTrustedServiceUpdate(c *check.C) {
 	dockerCmd(c, "push", repoName)
 	dockerCmd(c, "rmi", repoName)
 
-	serviceCmd = d.Command("service", "update", "--image", repoName, name)
+	serviceCmd = d.Command("service", "update", "-d", "--image", repoName, name)
 	icmd.RunCmd(serviceCmd, trustedCmd).Assert(c, icmd.Expected{
 		ExitCode: 1,
 		Err:      "Error: remote trust data does not exist",
@@ -1546,13 +1546,13 @@ func (s *DockerSwarmSuite) TestSwarmServicePsMultipleServiceIDs(c *check.C) {
 	d := s.AddDaemon(c, true, true)
 
 	name1 := "top1"
-	out, err := d.Cmd("service", "create", "--name", name1, "--replicas=3", "busybox", "top")
+	out, err := d.Cmd("service", "create", "-d", "--name", name1, "--replicas=3", "busybox", "top")
 	c.Assert(err, checker.IsNil)
 	c.Assert(strings.TrimSpace(out), checker.Not(checker.Equals), "")
 	id1 := strings.TrimSpace(out)
 
 	name2 := "top2"
-	out, err = d.Cmd("service", "create", "--name", name2, "--replicas=3", "busybox", "top")
+	out, err = d.Cmd("service", "create", "-d", "--name", name2, "--replicas=3", "busybox", "top")
 	c.Assert(err, checker.IsNil)
 	c.Assert(strings.TrimSpace(out), checker.Not(checker.Equals), "")
 	id2 := strings.TrimSpace(out)
@@ -1615,7 +1615,7 @@ func (s *DockerSwarmSuite) TestSwarmServicePsMultipleServiceIDs(c *check.C) {
 func (s *DockerSwarmSuite) TestSwarmPublishDuplicatePorts(c *check.C) {
 	d := s.AddDaemon(c, true, true)
 
-	out, err := d.Cmd("service", "create", "--publish", "5005:80", "--publish", "5006:80", "--publish", "80", "--publish", "80", "busybox", "top")
+	out, err := d.Cmd("service", "create", "-d", "--publish", "5005:80", "--publish", "5006:80", "--publish", "80", "--publish", "80", "busybox", "top")
 	c.Assert(err, check.IsNil, check.Commentf(out))
 	id := strings.TrimSpace(out)
 
@@ -1675,7 +1675,7 @@ func (s *DockerSwarmSuite) TestSwarmReadonlyRootfs(c *check.C) {
 
 	d := s.AddDaemon(c, true, true)
 
-	out, err := d.Cmd("service", "create", "--name", "top", "--read-only", "busybox", "top")
+	out, err := d.Cmd("service", "create", "-d", "--name", "top", "--read-only", "busybox", "top")
 	c.Assert(err, checker.IsNil, check.Commentf(out))
 
 	// make sure task has been deployed.

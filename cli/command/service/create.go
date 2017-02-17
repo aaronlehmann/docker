@@ -2,10 +2,12 @@ package service
 
 import (
 	"fmt"
+	"io"
 
 	"github.com/docker/docker/api/types"
 	"github.com/docker/docker/cli"
 	"github.com/docker/docker/cli/command"
+	"github.com/docker/docker/pkg/jsonmessage"
 	"github.com/spf13/cobra"
 	"golang.org/x/net/context"
 )
@@ -102,5 +104,33 @@ func runCreate(dockerCli *command.DockerCli, opts *serviceOptions) error {
 	}
 
 	fmt.Fprintf(dockerCli.Out(), "%s\n", response.ID)
-	return nil
+
+	if opts.detach {
+		return nil
+	}
+
+	errChan := make(chan error, 1)
+	pipeReader, pipeWriter := io.Pipe()
+
+	go func() {
+		errChan <- serviceProgress(ctx, apiClient, response.ID, pipeWriter)
+	}()
+
+	if opts.quiet {
+		go func() {
+			for {
+				var buf [1024]byte
+				if _, err := pipeReader.Read(buf[:]); err != nil {
+					return
+				}
+			}
+		}()
+		return <-errChan
+	}
+
+	err = jsonmessage.DisplayJSONMessagesToStream(pipeReader, dockerCli.Out(), nil)
+	if err == nil {
+		err = <-errChan
+	}
+	return err
 }

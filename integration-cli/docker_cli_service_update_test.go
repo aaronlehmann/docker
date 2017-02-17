@@ -15,7 +15,7 @@ func (s *DockerSwarmSuite) TestServiceUpdatePort(c *check.C) {
 	d := s.AddDaemon(c, true, true)
 
 	serviceName := "TestServiceUpdatePort"
-	serviceArgs := append([]string{"service", "create", "--name", serviceName, "-p", "8080:8081", defaultSleepImage}, sleepCommandForDaemonPlatform()...)
+	serviceArgs := append([]string{"service", "create", "-d", "--name", serviceName, "-p", "8080:8081", defaultSleepImage}, sleepCommandForDaemonPlatform()...)
 
 	// Create a service with a port mapping of 8080:8081.
 	out, err := d.Cmd(serviceArgs...)
@@ -23,7 +23,7 @@ func (s *DockerSwarmSuite) TestServiceUpdatePort(c *check.C) {
 	waitAndAssert(c, defaultReconciliationTimeout, d.CheckActiveContainerCount, checker.Equals, 1)
 
 	// Update the service: changed the port mapping from 8080:8081 to 8082:8083.
-	_, err = d.Cmd("service", "update", "--publish-add", "8082:8083", "--publish-rm", "8081", serviceName)
+	_, err = d.Cmd("service", "update", "-d", "--publish-add", "8082:8083", "--publish-rm", "8081", serviceName)
 	c.Assert(err, checker.IsNil)
 
 	// Inspect the service and verify port mapping
@@ -48,39 +48,39 @@ func (s *DockerSwarmSuite) TestServiceUpdatePort(c *check.C) {
 
 func (s *DockerSwarmSuite) TestServiceUpdateLabel(c *check.C) {
 	d := s.AddDaemon(c, true, true)
-	out, err := d.Cmd("service", "create", "--name=test", "busybox", "top")
+	out, err := d.Cmd("service", "create", "-d", "--name=test", "busybox", "top")
 	c.Assert(err, checker.IsNil, check.Commentf(out))
 	service := d.GetService(c, "test")
 	c.Assert(service.Spec.Labels, checker.HasLen, 0)
 
 	// add label to empty set
-	out, err = d.Cmd("service", "update", "test", "--label-add", "foo=bar")
+	out, err = d.Cmd("service", "update", "-d", "test", "--label-add", "foo=bar")
 	c.Assert(err, checker.IsNil, check.Commentf(out))
 	service = d.GetService(c, "test")
 	c.Assert(service.Spec.Labels, checker.HasLen, 1)
 	c.Assert(service.Spec.Labels["foo"], checker.Equals, "bar")
 
 	// add label to non-empty set
-	out, err = d.Cmd("service", "update", "test", "--label-add", "foo2=bar")
+	out, err = d.Cmd("service", "update", "-d", "test", "--label-add", "foo2=bar")
 	c.Assert(err, checker.IsNil, check.Commentf(out))
 	service = d.GetService(c, "test")
 	c.Assert(service.Spec.Labels, checker.HasLen, 2)
 	c.Assert(service.Spec.Labels["foo2"], checker.Equals, "bar")
 
-	out, err = d.Cmd("service", "update", "test", "--label-rm", "foo2")
+	out, err = d.Cmd("service", "update", "-d", "test", "--label-rm", "foo2")
 	c.Assert(err, checker.IsNil, check.Commentf(out))
 	service = d.GetService(c, "test")
 	c.Assert(service.Spec.Labels, checker.HasLen, 1)
 	c.Assert(service.Spec.Labels["foo2"], checker.Equals, "")
 
-	out, err = d.Cmd("service", "update", "test", "--label-rm", "foo")
+	out, err = d.Cmd("service", "update", "-d", "test", "--label-rm", "foo")
 	c.Assert(err, checker.IsNil, check.Commentf(out))
 	service = d.GetService(c, "test")
 	c.Assert(service.Spec.Labels, checker.HasLen, 0)
 	c.Assert(service.Spec.Labels["foo"], checker.Equals, "")
 
 	// now make sure we can add again
-	out, err = d.Cmd("service", "update", "test", "--label-add", "foo=bar")
+	out, err = d.Cmd("service", "update", "-d", "test", "--label-add", "foo=bar")
 	c.Assert(err, checker.IsNil, check.Commentf(out))
 	service = d.GetService(c, "test")
 	c.Assert(service.Spec.Labels, checker.HasLen, 1)
@@ -100,11 +100,11 @@ func (s *DockerSwarmSuite) TestServiceUpdateSecrets(c *check.C) {
 	testTarget := "testing"
 	serviceName := "test"
 
-	out, err := d.Cmd("service", "create", "--name", serviceName, "busybox", "top")
+	out, err := d.Cmd("service", "create", "-d", "--name", serviceName, "busybox", "top")
 	c.Assert(err, checker.IsNil, check.Commentf(out))
 
 	// add secret
-	out, err = d.CmdRetryOutOfSequence("service", "update", "test", "--secret-add", fmt.Sprintf("source=%s,target=%s", testName, testTarget))
+	out, err = d.CmdRetryOutOfSequence("service", "update", "-d", "test", "--secret-add", fmt.Sprintf("source=%s,target=%s", testName, testTarget))
 	c.Assert(err, checker.IsNil, check.Commentf(out))
 
 	out, err = d.Cmd("service", "inspect", "--format", "{{ json .Spec.TaskTemplate.ContainerSpec.Secrets }}", serviceName)
@@ -119,7 +119,7 @@ func (s *DockerSwarmSuite) TestServiceUpdateSecrets(c *check.C) {
 	c.Assert(refs[0].File.Name, checker.Equals, testTarget)
 
 	// remove
-	out, err = d.CmdRetryOutOfSequence("service", "update", "test", "--secret-rm", testName)
+	out, err = d.CmdRetryOutOfSequence("service", "update", "-d", "test", "--secret-rm", testName)
 	c.Assert(err, checker.IsNil, check.Commentf(out))
 
 	out, err = d.Cmd("service", "inspect", "--format", "{{ json .Spec.TaskTemplate.ContainerSpec.Secrets }}", serviceName)

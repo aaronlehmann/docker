@@ -16,7 +16,7 @@ import (
 
 func (s *DockerSwarmSuite) TestServiceCreateMountVolume(c *check.C) {
 	d := s.AddDaemon(c, true, true)
-	out, err := d.Cmd("service", "create", "--mount", "type=volume,source=foo,target=/foo,volume-nocopy", "busybox", "top")
+	out, err := d.Cmd("service", "create", "-d", "--mount", "type=volume,source=foo,target=/foo,volume-nocopy", "busybox", "top")
 	c.Assert(err, checker.IsNil, check.Commentf(out))
 	id := strings.TrimSpace(out)
 
@@ -75,7 +75,7 @@ func (s *DockerSwarmSuite) TestServiceCreateWithSecretSimple(c *check.C) {
 	})
 	c.Assert(id, checker.Not(checker.Equals), "", check.Commentf("secrets: %s", id))
 
-	out, err := d.Cmd("service", "create", "--name", serviceName, "--secret", testName, "busybox", "top")
+	out, err := d.Cmd("service", "create", "-d", "--name", serviceName, "--secret", testName, "busybox", "top")
 	c.Assert(err, checker.IsNil, check.Commentf(out))
 
 	out, err = d.Cmd("service", "inspect", "--format", "{{ json .Spec.TaskTemplate.ContainerSpec.Secrets }}", serviceName)
@@ -106,7 +106,7 @@ func (s *DockerSwarmSuite) TestServiceCreateWithSecretSourceTarget(c *check.C) {
 	c.Assert(id, checker.Not(checker.Equals), "", check.Commentf("secrets: %s", id))
 	testTarget := "testing"
 
-	out, err := d.Cmd("service", "create", "--name", serviceName, "--secret", fmt.Sprintf("source=%s,target=%s", testName, testTarget), "busybox", "top")
+	out, err := d.Cmd("service", "create", "-d", "--name", serviceName, "--secret", fmt.Sprintf("source=%s,target=%s", testName, testTarget), "busybox", "top")
 	c.Assert(err, checker.IsNil, check.Commentf(out))
 
 	out, err = d.Cmd("service", "inspect", "--format", "{{ json .Spec.TaskTemplate.ContainerSpec.Secrets }}", serviceName)
@@ -123,7 +123,7 @@ func (s *DockerSwarmSuite) TestServiceCreateWithSecretSourceTarget(c *check.C) {
 
 func (s *DockerSwarmSuite) TestServiceCreateMountTmpfs(c *check.C) {
 	d := s.AddDaemon(c, true, true)
-	out, err := d.Cmd("service", "create", "--mount", "type=tmpfs,target=/foo,tmpfs-size=1MB", "busybox", "sh", "-c", "mount | grep foo; tail -f /dev/null")
+	out, err := d.Cmd("service", "create", "-d", "--mount", "type=tmpfs,target=/foo,tmpfs-size=1MB", "busybox", "sh", "-c", "mount | grep foo; tail -f /dev/null")
 	c.Assert(err, checker.IsNil, check.Commentf(out))
 	id := strings.TrimSpace(out)
 
