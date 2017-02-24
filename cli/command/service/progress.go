@@ -17,17 +17,29 @@ import (
 	"golang.org/x/net/context"
 )
 
-var stateToProgress = map[swarm.TaskState]int64{
-	swarm.TaskStateNew:       1,
-	swarm.TaskStateAllocated: 2,
-	swarm.TaskStatePending:   3,
-	swarm.TaskStateAssigned:  4,
-	swarm.TaskStateAccepted:  5,
-	swarm.TaskStatePreparing: 6,
-	swarm.TaskStateReady:     7,
-	swarm.TaskStateStarting:  8,
-	swarm.TaskStateRunning:   9,
-}
+var (
+	stateToProgress = map[swarm.TaskState]int64{
+		swarm.TaskStateNew:       1,
+		swarm.TaskStateAllocated: 2,
+		swarm.TaskStatePending:   3,
+		swarm.TaskStateAssigned:  4,
+		swarm.TaskStateAccepted:  5,
+		swarm.TaskStatePreparing: 6,
+		swarm.TaskStateReady:     7,
+		swarm.TaskStateStarting:  8,
+		swarm.TaskStateRunning:   9,
+	}
+
+	longestState = func() int {
+		longest := 0
+		for state := range stateToProgress {
+			if len(state) > longest {
+				longest = len(state)
+			}
+		}
+		return longest
+	}()
+)
 
 const (
 	maxProgress     = 9
@@ -113,12 +125,25 @@ func serviceProgress(ctx context.Context, client client.APIClient, serviceID str
 			if convergedAt.IsZero() {
 				convergedAt = time.Now()
 			}
+			wait := monitor - time.Since(convergedAt)
+			if wait >= time.Second {
+				progressOut.WriteProgress(progress.Progress{
+					Action: fmt.Sprintf("Waiting %d seconds to verify that tasks are stable...", wait/time.Second),
+				})
+			}
 		} else {
 			convergedAt = time.Time{}
 		}
 
 		time.Sleep(200 * time.Millisecond)
 	}
+}
+
+func writeOverallProgress(progressOut progress.Output, numerator, denominator int) {
+	progressOut.WriteProgress(progress.Progress{
+		ID:     "overall progress",
+		Action: fmt.Sprintf("%d out of %d tasks", numerator, denominator),
+	})
 }
 
 type replicatedProgressUpdater struct {
@@ -144,10 +169,7 @@ func (u *replicatedProgressUpdater) update(ctx context.Context, service swarm.Se
 		u.slotMap = make(map[int]int)
 
 		// Draw progress bars in order
-		u.progressOut.WriteProgress(progress.Progress{
-			ID:    "overall",
-			Total: int64(replicas),
-		})
+		writeOverallProgress(u.progressOut, 0, int(replicas))
 
 		if replicas <= maxProgressBars {
 			for i := uint64(1); i <= replicas; i++ {
@@ -166,10 +188,11 @@ func (u *replicatedProgressUpdater) update(ctx context.Context, service swarm.Se
 			}
 			if !u.done && replicas <= maxProgressBars && uint64(mappedSlot) <= replicas {
 				u.progressOut.WriteProgress(progress.Progress{
-					ID:      fmt.Sprintf("%d/%d", mappedSlot, replicas),
-					Action:  string(task.Status.State),
-					Current: stateToProgress[task.Status.State],
-					Total:   maxProgress,
+					ID:         fmt.Sprintf("%d/%d", mappedSlot, replicas),
+					Action:     fmt.Sprintf("%-[1]*s", longestState, task.Status.State),
+					Current:    stateToProgress[task.Status.State],
+					Total:      maxProgress,
+					HideCounts: true,
 				})
 			}
 			if task.Status.State == swarm.TaskStateRunning {
@@ -179,14 +202,9 @@ func (u *replicatedProgressUpdater) update(ctx context.Context, service swarm.Se
 	}
 
 	if !u.done {
-		u.progressOut.WriteProgress(progress.Progress{
-			ID:      "overall",
-			Current: int64(running),
-			Total:   int64(replicas),
-		})
+		writeOverallProgress(u.progressOut, int(running), int(replicas))
 
 		if running == replicas {
-			progress.Message(u.progressOut, "", "Waiting to verify that tasks are stable...")
 			u.done = true
 		}
 	}
@@ -219,10 +237,7 @@ func (u *globalProgressUpdater) update(ctx context.Context, service swarm.Servic
 	nodeCount := len(activeNodes)
 
 	if !u.initialized {
-		u.progressOut.WriteProgress(progress.Progress{
-			ID:    "overall",
-			Total: int64(nodeCount),
-		})
+		writeOverallProgress(u.progressOut, 0, nodeCount)
 		u.initialized = true
 	}
 
@@ -230,10 +245,11 @@ func (u *globalProgressUpdater) update(ctx context.Context, service swarm.Servic
 		if node, nodeActive := activeNodes[task.NodeID]; nodeActive && taskUpToDate(service, task) {
 			if !u.done && nodeCount <= maxProgressBars {
 				u.progressOut.WriteProgress(progress.Progress{
-					ID:      stringid.TruncateID(node.ID),
-					Action:  string(task.Status.State),
-					Current: stateToProgress[task.Status.State],
-					Total:   maxProgress,
+					ID:         stringid.TruncateID(node.ID),
+					Action:     fmt.Sprintf("%-[1]*s", longestState, task.Status.State),
+					Current:    stateToProgress[task.Status.State],
+					Total:      maxProgress,
+					HideCounts: true,
 				})
 			}
 			if task.Status.State == swarm.TaskStateRunning {
@@ -243,14 +259,9 @@ func (u *globalProgressUpdater) update(ctx context.Context, service swarm.Servic
 	}
 
 	if !u.done {
-		u.progressOut.WriteProgress(progress.Progress{
-			ID:      "overall",
-			Current: int64(running),
-			Total:   int64(nodeCount),
-		})
+		writeOverallProgress(u.progressOut, running, nodeCount)
 
 		if running == nodeCount {
-			progress.Message(u.progressOut, "", "Waiting to verify that tasks are stable...")
 			u.done = true
 		}
 	}

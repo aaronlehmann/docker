@@ -162,7 +162,7 @@ func runUpdate(dockerCli *command.DockerCli, flags *pflag.FlagSet, opts *service
 
 	fmt.Fprintf(dockerCli.Out(), "%s\n", serviceID)
 
-	if opts.detach {
+	if !opts.interactive {
 		return nil
 	}
 

@@ -258,8 +258,8 @@ func convertExtraHostsToSwarmHosts(extraHosts []string) []string {
 }
 
 type serviceOptions struct {
-	detach bool
-	quiet  bool
+	interactive bool
+	quiet       bool
 
 	name            string
 	labels          opts.ListOpts
@@ -424,7 +424,7 @@ func (opts *serviceOptions) ToService() (swarm.ServiceSpec, error) {
 func addServiceFlags(cmd *cobra.Command, opts *serviceOptions) {
 	flags := cmd.Flags()
 
-	flags.BoolVarP(&opts.detach, "detach", "d", false, "Create service in background")
+	flags.BoolVarP(&opts.interactive, "interactive", "i", false, "Show progress information")
 	flags.BoolVarP(&opts.quiet, "quiet", "q", false, "Suppress progress output")
 
 	flags.StringVarP(&opts.workdir, flagWorkdir, "w", "", "Working directory inside the container")

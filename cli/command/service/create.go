@@ -105,7 +105,7 @@ func runCreate(dockerCli *command.DockerCli, opts *serviceOptions) error {
 
 	fmt.Fprintf(dockerCli.Out(), "%s\n", response.ID)
 
-	if opts.detach {
+	if !opts.interactive {
 		return nil
 	}
 
