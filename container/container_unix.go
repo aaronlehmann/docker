@@ -163,11 +163,6 @@ func (container *Container) NetworkMounts() []Mount {
 	return mounts
 }
 
-// SecretMountPath returns the path of the secret mount for the container
-func (container *Container) SecretMountPath() string {
-	return filepath.Join(container.Root, "secrets")
-}
-
 // CopyImagePathContent copies files in destination to the volume.
 func (container *Container) CopyImagePathContent(v volume.Volume, destination string) error {
 	rootfs, err := symlink.FollowSymlinkInScope(filepath.Join(container.BaseFS, destination), container.BaseFS)
@@ -253,29 +248,40 @@ func (container *Container) IpcMounts() []Mount {
 	return mounts
 }
 
-// SecretMount returns the mount for the secret path
-func (container *Container) SecretMount() *Mount {
-	if len(container.SecretReferences) > 0 {
-		return &Mount{
-			Source:      container.SecretMountPath(),
-			Destination: containerSecretMountPath,
+// SecretMounts returns the mount for the secret path
+func (container *Container) SecretMounts() []Mount {
+	var mounts []Mount
+	for _, r := range container.SecretReferences {
+		// secrets are created in the SecretMountPath at a single level
+		// i.e. /var/run/secrets/foo
+		srcPath := container.getLocalSecretPath(r)
+		mounts = append(mounts, Mount{
+			Source:      srcPath,
+			Destination: getSecretTargetPath(r),
 			Writable:    false,
-		}
+		})
 	}
 
-	return nil
+	return mounts
 }
 
 // UnmountSecrets unmounts the local tmpfs for secrets
 func (container *Container) UnmountSecrets() error {
-	if _, err := os.Stat(container.SecretMountPath()); err != nil {
-		if os.IsNotExist(err) {
-			return nil
+	for _, r := range container.SecretReferences {
+		srcPath := container.getLocalSecretPath(r)
+		if _, err := os.Stat(srcPath); err != nil {
+			if os.IsNotExist(err) {
+				return nil
+			}
+			return err
 		}
-		return err
+
+		if err := detachMounted(srcPath); err != nil {
+			return err
+		}
 	}
 
-	return detachMounted(container.SecretMountPath())
+	return nil
 }
 
 // UpdateContainer updates configuration of a container.
