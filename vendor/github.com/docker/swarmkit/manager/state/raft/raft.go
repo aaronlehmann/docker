@@ -160,12 +160,17 @@ type NodeOptions struct {
 	ID string
 	// Addr is the address of this node's listener
 	Addr string
+	// UpdateAddr specifies whether our address should be automatically
+	// updated if it changes from the perspective of other nodes.
+	UpdateAddr bool
 	// ForceNewCluster defines if we have to force a new cluster
 	// because we are recovering from a backup data directory.
 	ForceNewCluster bool
 	// JoinAddr is the cluster to join. May be an empty string to create
 	// a standalone cluster.
 	JoinAddr string
+	// ForceJoin tells us to join even if already part of a cluster.
+	ForceJoin bool
 	// Config is the raft config.
 	Config *raft.Config
 	// StateDir is the directory to store durable state.
@@ -278,11 +283,12 @@ func (n *Node) ReportUnreachable(id uint64) {
 // SetAddr provides the raft node's address. This can be used in cases where
 // opts.Addr was not provided to NewNode, for example when a port was not bound
 // until after the raft node was created.
-func (n *Node) SetAddr(ctx context.Context, addr string) error {
+func (n *Node) SetAddr(ctx context.Context, addr string, autodetected bool) error {
 	n.addrLock.Lock()
 	defer n.addrLock.Unlock()
 
 	n.opts.Addr = addr
+	n.opts.UpdateAddr = autodetected
 
 	if !n.IsMember() {
 		return nil
@@ -349,6 +355,8 @@ func (n *Node) initTransport() {
 		SendTimeout:       n.opts.SendTimeout,
 		Credentials:       n.opts.TLSCredentials,
 		Raft:              n,
+		OurAddr:           n.opts.Addr,
+		UpdateOwnAddr:     n.opts.UpdateAddr,
 	}
 	n.transport = transport.New(transportConfig)
 }
@@ -393,8 +401,10 @@ func (n *Node) JoinAndStart(ctx context.Context) (err error) {
 
 	// restore from snapshot
 	if loadAndStartErr == nil {
-		if n.opts.JoinAddr != "" {
-			log.G(ctx).Warning("ignoring request to join cluster, because raft state already exists")
+		if n.opts.JoinAddr != "" && n.opts.ForceJoin {
+			if err := n.joinCluster(ctx); err != nil {
+				return errors.Wrap(err, "failed to rejoin cluster")
+			}
 		}
 		n.campaignWhenAble = true
 		n.initTransport()
@@ -402,7 +412,6 @@ func (n *Node) JoinAndStart(ctx context.Context) (err error) {
 		return nil
 	}
 
-	// first member of cluster
 	if n.opts.JoinAddr == "" {
 		// First member in the cluster, self-assign ID
 		n.Config.ID = uint64(rand.Int63()) + 1
@@ -417,6 +426,22 @@ func (n *Node) JoinAndStart(ctx context.Context) (err error) {
 	}
 
 	// join to existing cluster
+
+	if err := n.joinCluster(ctx); err != nil {
+		return err
+	}
+
+	if _, err := n.newRaftLogs(n.opts.ID); err != nil {
+		return err
+	}
+
+	n.initTransport()
+	n.raftNode = raft.StartNode(n.Config, nil)
+
+	return nil
+}
+
+func (n *Node) joinCluster(ctx context.Context) error {
 	if n.opts.Addr == "" {
 		return errors.New("attempted to join raft cluster without knowing own address")
 	}
@@ -438,15 +463,7 @@ func (n *Node) JoinAndStart(ctx context.Context) (err error) {
 	}
 
 	n.Config.ID = resp.RaftID
-
-	if _, err := n.newRaftLogs(n.opts.ID); err != nil {
-		return err
-	}
 	n.bootstrapMembers = resp.Members
-
-	n.initTransport()
-	n.raftNode = raft.StartNode(n.Config, nil)
-
 	return nil
 }
 
@@ -909,24 +926,6 @@ func (n *Node) Join(ctx context.Context, req *api.JoinRequest) (*api.JoinRespons
 		return nil, grpc.Errorf(codes.FailedPrecondition, "%s", ErrLostLeadership.Error())
 	}
 
-	// A single manager must not be able to join the raft cluster twice. If
-	// it did, that would cause the quorum to be computed incorrectly. This
-	// could happen if the WAL was deleted from an active manager.
-	for _, m := range n.cluster.Members() {
-		if m.NodeID == nodeInfo.NodeID {
-			return nil, grpc.Errorf(codes.AlreadyExists, "%s", "a raft member with this node ID already exists")
-		}
-	}
-
-	// Find a unique ID for the joining member.
-	var raftID uint64
-	for {
-		raftID = uint64(rand.Int63()) + 1
-		if n.cluster.GetMember(raftID) == nil && !n.cluster.IsIDRemoved(raftID) {
-			break
-		}
-	}
-
 	remoteAddr := req.Addr
 
 	// If the joining node sent an address like 0.0.0.0:4242, automatically
@@ -953,12 +952,54 @@ func (n *Node) Join(ctx context.Context, req *api.JoinRequest) (*api.JoinRespons
 		return nil, err
 	}
 
+	// If the peer is already a member of the cluster, we will only update
+	// its information, not add it as a new member. Adding it again would
+	// cause the quorum to be computed incorrectly.
+	for _, m := range n.cluster.Members() {
+		if m.NodeID == nodeInfo.NodeID {
+			if remoteAddr == m.Addr {
+				return n.joinResponse(m.RaftID), nil
+			}
+			updatedRaftMember := &api.RaftMember{
+				RaftID: m.RaftID,
+				NodeID: m.NodeID,
+				Addr:   remoteAddr,
+			}
+			if err := n.cluster.UpdateMember(m.RaftID, updatedRaftMember); err != nil {
+				return nil, err
+			}
+
+			if err := n.updateNodeBlocking(ctx, m.RaftID, remoteAddr); err != nil {
+				log.WithError(err).Error("failed to update node address")
+				return nil, err
+			}
+
+			log.Info("updated node address")
+			return n.joinResponse(m.RaftID), nil
+		}
+	}
+
+	// Find a unique ID for the joining member.
+	var raftID uint64
+	for {
+		raftID = uint64(rand.Int63()) + 1
+		if n.cluster.GetMember(raftID) == nil && !n.cluster.IsIDRemoved(raftID) {
+			break
+		}
+	}
+
 	err = n.addMember(ctx, remoteAddr, raftID, nodeInfo.NodeID)
 	if err != nil {
 		log.WithError(err).Errorf("failed to add member %x", raftID)
 		return nil, err
 	}
 
+	log.Debug("node joined")
+
+	return n.joinResponse(raftID), nil
+}
+
+func (n *Node) joinResponse(raftID uint64) *api.JoinResponse {
 	var nodes []*api.RaftMember
 	for _, node := range n.cluster.Members() {
 		nodes = append(nodes, &api.RaftMember{
@@ -967,9 +1008,8 @@ func (n *Node) Join(ctx context.Context, req *api.JoinRequest) (*api.JoinRespons
 			Addr:   node.Addr,
 		})
 	}
-	log.Debugf("node joined")
 
-	return &api.JoinResponse{Members: nodes, RaftID: raftID}, nil
+	return &api.JoinResponse{Members: nodes, RaftID: raftID}
 }
 
 // checkHealth tries to contact an aspiring member through its advertised address
@@ -1222,42 +1262,48 @@ func (n *Node) processRaftMessageLogger(ctx context.Context, msg *api.ProcessRaf
 	return log.G(ctx).WithFields(fields)
 }
 
-func (n *Node) reportNewAddress(ctx context.Context, id uint64) error {
-	// too early
-	if !n.IsMember() {
-		return nil
-	}
+func (n *Node) didIPChange(ctx context.Context, msg *api.ProcessRaftMessageRequest) bool {
 	p, ok := peer.FromContext(ctx)
 	if !ok {
-		return nil
+		n.processRaftMessageLogger(ctx, msg).Debug("could get remote peer info")
+		return false
 	}
-	oldAddr, err := n.transport.PeerAddr(id)
+
+	remoteHost, _, err := net.SplitHostPort(p.Addr.String())
 	if err != nil {
-		return err
+		n.processRaftMessageLogger(ctx, msg).WithError(err).Debug("could not split remote address for peer")
+		return false
 	}
-	if oldAddr == "" {
-		// Don't know the address of the peer yet, so can't report an
-		// update.
-		return nil
+
+	member := n.cluster.GetMember(msg.Message.From)
+	if member == nil {
+		n.processRaftMessageLogger(ctx, msg).Debug("received message from unknown member")
+		return false
 	}
-	newHost, _, err := net.SplitHostPort(p.Addr.String())
+
+	expectedHost, _, err := net.SplitHostPort(member.Addr)
 	if err != nil {
-		return err
+		n.processRaftMessageLogger(ctx, msg).WithError(err).Debug("could not split expected address for peer")
+		return false
 	}
-	_, officialPort, err := net.SplitHostPort(oldAddr)
-	if err != nil {
-		return err
+
+	expectedIP := net.ParseIP(expectedHost)
+	if expectedIP == nil {
+		n.processRaftMessageLogger(ctx, msg).Debug("could not parse expected IP address for peer")
+		return false
 	}
-	newAddr := net.JoinHostPort(newHost, officialPort)
-	if err := n.transport.UpdatePeerAddr(id, newAddr); err != nil {
-		return err
+
+	remoteIP := net.ParseIP(remoteHost)
+	if remoteIP == nil {
+		n.processRaftMessageLogger(ctx, msg).Debug("could not parse remote IP address for peer")
+		return false
 	}
-	return nil
+
+	return !remoteIP.Equal(expectedIP)
 }
 
-// ProcessRaftMessage calls 'Step' which advances the
-// raft state machine with the provided message on the
-// receiving node
+// ProcessRaftMessage calls 'Step' which advances the raft state machine with
+// the provided message on the receiving node.
 func (n *Node) ProcessRaftMessage(ctx context.Context, msg *api.ProcessRaftMessageRequest) (*api.ProcessRaftMessageResponse, error) {
 	if msg == nil || msg.Message == nil {
 		n.processRaftMessageLogger(ctx, msg).Debug("received empty message")
@@ -1274,25 +1320,19 @@ func (n *Node) ProcessRaftMessage(ctx context.Context, msg *api.ProcessRaftMessa
 	ctx, cancel := n.WithContext(ctx)
 	defer cancel()
 
-	// TODO(aaronl): Address changes are temporarily disabled.
-	// See https://github.com/docker/docker/issues/30455.
-	// This should be reenabled in the future with additional
-	// safeguards (perhaps storing multiple addresses per node).
-	//if err := n.reportNewAddress(ctx, msg.Message.From); err != nil {
-	//	log.G(ctx).WithError(err).Errorf("failed to report new address of %x to transport", msg.Message.From)
-	//}
+	response := &api.ProcessRaftMessageResponse{AddrMismatch: n.didIPChange(ctx, msg)}
 
 	// Reject vote requests from unreachable peers
 	if msg.Message.Type == raftpb.MsgVote {
 		member := n.cluster.GetMember(msg.Message.From)
 		if member == nil {
 			n.processRaftMessageLogger(ctx, msg).Debug("received message from unknown member")
-			return &api.ProcessRaftMessageResponse{}, nil
+			return response, nil
 		}
 
 		if err := n.transport.HealthCheck(ctx, msg.Message.From); err != nil {
 			n.processRaftMessageLogger(ctx, msg).WithError(err).Debug("member which sent vote request failed health check")
-			return &api.ProcessRaftMessageResponse{}, nil
+			return response, nil
 		}
 	}
 
@@ -1302,7 +1342,7 @@ func (n *Node) ProcessRaftMessage(ctx context.Context, msg *api.ProcessRaftMessa
 		// making proposals, so in-flight proposals can be
 		// guaranteed not to conflict.
 		n.processRaftMessageLogger(ctx, msg).Debug("dropped forwarded proposal")
-		return &api.ProcessRaftMessageResponse{}, nil
+		return response, nil
 	}
 
 	// can't stop the raft node while an async RPC is in progress
@@ -1312,7 +1352,7 @@ func (n *Node) ProcessRaftMessage(ctx context.Context, msg *api.ProcessRaftMessa
 	if n.IsMember() {
 		if msg.Message.To != n.Config.ID {
 			n.processRaftMessageLogger(ctx, msg).Errorf("received message intended for raft_id %x", msg.Message.To)
-			return &api.ProcessRaftMessageResponse{}, nil
+			return response, nil
 		}
 
 		if err := n.raftNode.Step(ctx, *msg.Message); err != nil {
@@ -1320,7 +1360,7 @@ func (n *Node) ProcessRaftMessage(ctx context.Context, msg *api.ProcessRaftMessa
 		}
 	}
 
-	return &api.ProcessRaftMessageResponse{}, nil
+	return response, nil
 }
 
 // ResolveAddress returns the address reaching for a given node ID.

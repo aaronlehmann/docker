@@ -62,6 +62,11 @@ type RemoteAddrs struct {
 
 	// Address to advertise to remote nodes (optional).
 	AdvertiseAddr string
+
+	// AdvertiseAutodetected specifies that the advertise address was
+	// detected automatically, and therefore should be updated if it
+	// changes.
+	AdvertiseAutodetected bool
 }
 
 // Config is used to tune the Manager.
@@ -86,7 +91,11 @@ type Config struct {
 	// cluster to join.
 	JoinRaft string
 
-	// Top-level state directory
+	// ForceJoin causes us to invoke raft's Join RPC even if already part
+	// of a cluster.
+	ForceJoin bool
+
+	// StateDir is the top-level state directory
 	StateDir string
 
 	// ForceNewCluster defines if we have to force a new cluster
@@ -201,6 +210,7 @@ func New(config *Config) (*Manager, error) {
 	newNodeOpts := raft.NodeOptions{
 		ID:              config.SecurityConfig.ClientTLSCreds.NodeID(),
 		JoinAddr:        config.JoinRaft,
+		ForceJoin:       config.ForceJoin,
 		Config:          raftCfg,
 		StateDir:        raftStateDir,
 		ForceNewCluster: config.ForceNewCluster,
@@ -308,6 +318,7 @@ func (m *Manager) BindRemote(ctx context.Context, addrs RemoteAddrs) error {
 	// If an AdvertiseAddr was specified, we use that as our
 	// externally-reachable address.
 	advertiseAddr := addrs.AdvertiseAddr
+	autodetected := addrs.AdvertiseAutodetected
 
 	var advertiseAddrPort string
 	if advertiseAddr == "" {
@@ -324,6 +335,7 @@ func (m *Manager) BindRemote(ctx context.Context, addrs RemoteAddrs) error {
 		// 0.0.0.0 here. Any "unspecified" (wildcard) IP will
 		// be substituted with the actual source address.
 		advertiseAddr = net.JoinHostPort("0.0.0.0", advertiseAddrPort)
+		autodetected = true
 	}
 
 	l, err := net.Listen("tcp", addrs.ListenAddr)
@@ -337,7 +349,7 @@ func (m *Manager) BindRemote(ctx context.Context, addrs RemoteAddrs) error {
 
 	m.config.RemoteAPI = &addrs
 
-	m.raftNode.SetAddr(ctx, advertiseAddr)
+	m.raftNode.SetAddr(ctx, advertiseAddr, autodetected)
 	m.remoteListener <- l
 
 	return nil
