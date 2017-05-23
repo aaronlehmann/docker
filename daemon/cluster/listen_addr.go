@@ -24,7 +24,7 @@ func resolveListenAddr(specifiedAddr string) (string, string, error) {
 	}
 	// Does the host component match any of the interface names on the
 	// system? If so, use the address from that interface.
-	specifiedIP, err := resolveInputIPAddr(specifiedHost, true)
+	specifiedIP, _, err := resolveInputIPAddr(specifiedHost, true)
 	if err != nil {
 		if err == errBadNetworkIdentifier {
 			err = errBadListenAddr
@@ -35,7 +35,7 @@ func resolveListenAddr(specifiedAddr string) (string, string, error) {
 	return specifiedIP.String(), specifiedPort, nil
 }
 
-func (c *Cluster) resolveAdvertiseAddr(advertiseAddr, listenAddrPort string) (string, string, error) {
+func (c *Cluster) resolveAdvertiseAddr(advertiseAddr, listenAddrPort string) (string, string, bool, error) {
 	// Approach:
 	// - If an advertise address is specified, use that. Resolve the
 	//   interface's address if an interface was specified in
@@ -55,37 +55,34 @@ func (c *Cluster) resolveAdvertiseAddr(advertiseAddr, listenAddrPort string) (st
 		}
 		// Does the host component match any of the interface names on the
 		// system? If so, use the address from that interface.
-		advertiseIP, err := resolveInputIPAddr(advertiseHost, false)
+		advertiseIP, autodetected, err := resolveInputIPAddr(advertiseHost, false)
 		if err != nil {
 			if err == errBadNetworkIdentifier {
 				err = errBadAdvertiseAddr
 			}
-			return "", "", err
+			return "", "", false, err
 		}
 
-		return advertiseIP.String(), advertisePort, nil
+		return advertiseIP.String(), advertisePort, autodetected, nil
 	}
 
 	if c.config.DefaultAdvertiseAddr != "" {
-		// Does the default advertise address component match any of the
-		// interface names on the system? If so, use the address from
-		// that interface.
-		defaultAdvertiseIP, err := resolveInputIPAddr(c.config.DefaultAdvertiseAddr, false)
+		defaultAdvertiseIP, autodetected, err := resolveInputIPAddr(c.config.DefaultAdvertiseAddr, false)
 		if err != nil {
 			if err == errBadNetworkIdentifier {
 				err = errBadDefaultAdvertiseAddr
 			}
-			return "", "", err
+			return "", "", false, err
 		}
 
-		return defaultAdvertiseIP.String(), listenAddrPort, nil
+		return defaultAdvertiseIP.String(), listenAddrPort, autodetected, nil
 	}
 
 	systemAddr, err := c.resolveSystemAddr()
 	if err != nil {
-		return "", "", err
+		return "", "", false, err
 	}
-	return systemAddr.String(), listenAddrPort, nil
+	return systemAddr.String(), listenAddrPort, true, nil
 }
 
 func resolveDataPathAddr(dataPathAddr string) (string, error) {
@@ -94,7 +91,7 @@ func resolveDataPathAddr(dataPathAddr string) (string, error) {
 		return "", nil
 	}
 	// If a data path flag is specified try to resolve the IP address.
-	dataPathIP, err := resolveInputIPAddr(dataPathAddr, false)
+	dataPathIP, _, err := resolveInputIPAddr(dataPathAddr, false)
 	if err != nil {
 		if err == errBadNetworkIdentifier {
 			err = errBadDataPathAddr
@@ -154,24 +151,24 @@ func resolveInterfaceAddr(specifiedInterface string) (net.IP, error) {
 // - tries to match the string as an interface name, if so returns the IP address associated with it
 // - on failure of previous step tries to parse the string as an IP address itself
 //	 if succeeds returns the IP address
-func resolveInputIPAddr(input string, isUnspecifiedValid bool) (net.IP, error) {
+func resolveInputIPAddr(input string, isUnspecifiedValid bool) (net.IP, bool, error) {
 	// Try to see if it is an interface name
 	interfaceAddr, err := resolveInterfaceAddr(input)
 	if err == nil {
-		return interfaceAddr, nil
+		return interfaceAddr, true, nil
 	}
 	// String matched interface but there is a potential ambiguity to be resolved
 	if err != errNoSuchInterface {
-		return nil, err
+		return nil, false, err
 	}
 
 	// String is not an interface check if it is a valid IP
 	if ip := net.ParseIP(input); ip != nil && (isUnspecifiedValid || !ip.IsUnspecified()) {
-		return ip, nil
+		return ip, false, nil
 	}
 
 	// Not valid IP found
-	return nil, errBadNetworkIdentifier
+	return nil, false, errBadNetworkIdentifier
 }
 
 func (c *Cluster) resolveSystemAddrViaSubnetCheck() (net.IP, error) {

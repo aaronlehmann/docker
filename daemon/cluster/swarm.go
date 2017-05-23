@@ -49,7 +49,7 @@ func (c *Cluster) Init(req types.InitRequest) (string, error) {
 		return "", err
 	}
 
-	advertiseHost, advertisePort, err := c.resolveAdvertiseAddr(req.AdvertiseAddr, listenPort)
+	advertiseHost, advertisePort, autodetected, err := c.resolveAdvertiseAddr(req.AdvertiseAddr, listenPort)
 	if err != nil {
 		return "", err
 	}
@@ -89,13 +89,14 @@ func (c *Cluster) Init(req types.InitRequest) (string, error) {
 	}
 
 	nr, err := c.newNodeRunner(nodeStartConfig{
-		forceNewCluster: req.ForceNewCluster,
-		autolock:        req.AutoLockManagers,
-		LocalAddr:       localAddr,
-		ListenAddr:      net.JoinHostPort(listenHost, listenPort),
-		AdvertiseAddr:   net.JoinHostPort(advertiseHost, advertisePort),
-		DataPathAddr:    dataPathAddr,
-		availability:    req.Availability,
+		forceNewCluster:       req.ForceNewCluster,
+		autolock:              req.AutoLockManagers,
+		LocalAddr:             localAddr,
+		ListenAddr:            net.JoinHostPort(listenHost, listenPort),
+		AdvertiseAddr:         net.JoinHostPort(advertiseHost, advertisePort),
+		AdvertiseAutodetected: autodetected,
+		DataPathAddr:          dataPathAddr,
+		availability:          req.Availability,
 	})
 	if err != nil {
 		return "", err
@@ -146,8 +147,10 @@ func (c *Cluster) Join(req types.JoinRequest) error {
 	}
 
 	var advertiseAddr string
+	autodetected := true
 	if req.AdvertiseAddr != "" {
-		advertiseHost, advertisePort, err := c.resolveAdvertiseAddr(req.AdvertiseAddr, listenPort)
+		var advertiseHost, advertisePort string
+		advertiseHost, advertisePort, autodetected, err = c.resolveAdvertiseAddr(req.AdvertiseAddr, listenPort)
 		// For joining, we don't need to provide an advertise address,
 		// since the remote side can detect it.
 		if err == nil {
@@ -161,13 +164,14 @@ func (c *Cluster) Join(req types.JoinRequest) error {
 	}
 
 	nr, err := c.newNodeRunner(nodeStartConfig{
-		RemoteAddr:    req.RemoteAddrs[0],
-		ListenAddr:    net.JoinHostPort(listenHost, listenPort),
-		AdvertiseAddr: advertiseAddr,
-		DataPathAddr:  dataPathAddr,
-		joinAddr:      req.RemoteAddrs[0],
-		joinToken:     req.JoinToken,
-		availability:  req.Availability,
+		RemoteAddr:            req.RemoteAddrs[0],
+		ListenAddr:            net.JoinHostPort(listenHost, listenPort),
+		AdvertiseAddr:         advertiseAddr,
+		AdvertiseAutodetected: autodetected,
+		DataPathAddr:          dataPathAddr,
+		joinAddr:              req.RemoteAddrs[0],
+		joinToken:             req.JoinToken,
+		availability:          req.Availability,
 	})
 	if err != nil {
 		return err

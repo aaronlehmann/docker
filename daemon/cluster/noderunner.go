@@ -48,6 +48,9 @@ type nodeStartConfig struct {
 	// AdvertiseAddr is the address other nodes should connect to,
 	// including a port.
 	AdvertiseAddr string
+	// AdvertiseAutodetected is set to true if the advertise address was
+	// automatically detected, and should be updated if it changes.
+	AdvertiseAutodetected bool
 	// DataPathAddr is the address that has to be used for the data path
 	DataPathAddr string
 	// JoinInProgress is set to true if a join operation has started, but
@@ -111,19 +114,20 @@ func (n *nodeRunner) start(conf nodeStartConfig) error {
 	// Hostname is not set here. Instead, it is obtained from
 	// the node description that is reported periodically
 	swarmnodeConfig := swarmnode.Config{
-		ForceNewCluster:    conf.forceNewCluster,
-		ListenControlAPI:   control,
-		ListenRemoteAPI:    conf.ListenAddr,
-		AdvertiseRemoteAPI: conf.AdvertiseAddr,
-		JoinAddr:           joinAddr,
-		StateDir:           n.cluster.root,
-		JoinToken:          conf.joinToken,
-		Executor:           container.NewExecutor(n.cluster.config.Backend),
-		HeartbeatTick:      1,
-		ElectionTick:       3,
-		UnlockKey:          conf.lockKey,
-		AutoLockManagers:   conf.autolock,
-		PluginGetter:       n.cluster.config.Backend.PluginGetter(),
+		ForceNewCluster:       conf.forceNewCluster,
+		ListenControlAPI:      control,
+		ListenRemoteAPI:       conf.ListenAddr,
+		AdvertiseRemoteAPI:    conf.AdvertiseAddr,
+		AdvertiseAutodetected: conf.AdvertiseAutodetected,
+		JoinAddr:              joinAddr,
+		StateDir:              n.cluster.root,
+		JoinToken:             conf.joinToken,
+		Executor:              container.NewExecutor(n.cluster.config.Backend),
+		HeartbeatTick:         1,
+		ElectionTick:          3,
+		UnlockKey:             conf.lockKey,
+		AutoLockManagers:      conf.autolock,
+		PluginGetter:          n.cluster.config.Backend.PluginGetter(),
 	}
 	if conf.availability != "" {
 		avail, ok := swarmapi.NodeSpec_Availability_value[strings.ToUpper(string(conf.availability))]
