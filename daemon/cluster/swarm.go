@@ -130,12 +130,6 @@ func (c *Cluster) Init(req types.InitRequest) (string, error) {
 func (c *Cluster) Join(req types.JoinRequest) error {
 	c.controlMutex.Lock()
 	defer c.controlMutex.Unlock()
-	c.mu.Lock()
-	if c.nr != nil {
-		c.mu.Unlock()
-		return errSwarmExists
-	}
-	c.mu.Unlock()
 
 	if err := validateAndSanitizeJoinRequest(&req); err != nil {
 		return apierrors.NewBadRequestError(err)
@@ -163,7 +157,16 @@ func (c *Cluster) Join(req types.JoinRequest) error {
 		return err
 	}
 
-	nr, err := c.newNodeRunner(nodeStartConfig{
+	c.mu.Lock()
+	nr := c.nr
+	c.mu.Unlock()
+	if nr != nil {
+		if err := nr.Stop(); err != nil {
+			return err
+		}
+	}
+
+	nr, err = c.newNodeRunner(nodeStartConfig{
 		RemoteAddr:            req.RemoteAddrs[0],
 		ListenAddr:            net.JoinHostPort(listenHost, listenPort),
 		AdvertiseAddr:         advertiseAddr,
